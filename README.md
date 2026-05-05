@@ -14,18 +14,29 @@
 > cannot be merged there. **Source and discussion go to Codeberg, signed APKs
 > are downloaded from GitHub Releases.**
 
+
+<div align="center">
+
+<img src="assets/icon.svg" width="150" alt="Icon">
+
 # QBSmarter
 
-*Pronounced "cube smarter" &ndash; nothing fancy or complicated.*
+Pronounced *"cube smarter" &ndash;* nothing fancy or complicated.
+
+</div>
 
 QBSmarter is an **Android-first companion app for Bluetooth-enabled smart
-speedcubes**, written in Kotlin with Compose Multiplatform. It connects to
-your cube over BLE, renders it in real-time 3D visualization, generates scrambles, times
-your solves, and keeps a per-profile history with statistics. The minimum
-supported version of Android is 10 (API 29).
+cubes**, written in Kotlin with Compose Multiplatform.
 
-QBSmarter is build on Material3, which allows it to look beautiful everywhere &ndash;
-you can choose between using the light mode or dark mode, as well as 8 different color accents.
+It connects to your cube over BLE and renders a real-time 3D visualization
+of your cube including face moves and gyro rotations. It also generates scrambles,
+times your solves, and keeps a per-profile history of them with useful statistics included.
+
+<div align="center">
+
+**Here are some screenshots:**
+
+</div>
 
 <table style="width:auto">
   <tr>
@@ -35,8 +46,22 @@ you can choose between using the light mode or dark mode, as well as 8 different
   </tr>
 </table>
 
-More screenshots, with descriptions, are located in
-[assets/Markdown/SCREENSHOTS.md](assets/Markdown/SCREENSHOTS.md).
+>More screenshots with descriptions are located [here](assets/Markdown/SCREENSHOTS.md).
+
+QBSmarter is build on Material 3, which allows it to look beautiful everywhere.
+You can choose between 8 different color accents, as well as pick the overall theme. The app
+supports both dark mode and light mode, though it follows your system's theme preference
+by default.
+
+> Note: the minimum supported version of Android required to use QBSmarter is **Android 10** (API 29).
+
+<div align="center">
+
+### Download the latest released APK from GitHub:
+
+[![Download latest version](https://img.shields.io/badge/Download-Latest%20Version-blue?style=for-the-badge&logo=download)](https://github.com/zucham/QBSmarter/releases/latest)
+
+</div>
 
 ---
 
