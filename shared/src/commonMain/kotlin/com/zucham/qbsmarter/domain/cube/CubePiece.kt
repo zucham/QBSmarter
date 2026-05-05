@@ -38,13 +38,13 @@ fun homePositionFromName(name: String): Vec3 {
  * `composeResources/files/`.
  */
 val CUBE_PARTS: List<CubePieceData> = listOf(
-    CubePieceData("URF.obj"), CubePieceData("UF.obj"),  CubePieceData("ULF.obj"),
-    CubePieceData("UL.obj"),  CubePieceData("ULB.obj"), CubePieceData("UB.obj"),
-    CubePieceData("URB.obj"), CubePieceData("UR.obj"),  CubePieceData("U.obj"),
-    CubePieceData("F.obj"),   CubePieceData("RF.obj"),  CubePieceData("R.obj"),
-    CubePieceData("RB.obj"),  CubePieceData("B.obj"),   CubePieceData("LB.obj"),
-    CubePieceData("L.obj"),   CubePieceData("LF.obj"),
-    CubePieceData("DRF.obj"), CubePieceData("DF.obj"),  CubePieceData("DLF.obj"),
-    CubePieceData("DL.obj"),  CubePieceData("DLB.obj"), CubePieceData("DB.obj"),
-    CubePieceData("DRB.obj"), CubePieceData("DR.obj"),  CubePieceData("D.obj"),
+    CubePieceData("gan_cube_model/URF.obj"), CubePieceData("gan_cube_model/UF.obj"),  CubePieceData("gan_cube_model/ULF.obj"),
+    CubePieceData("gan_cube_model/UL.obj"),  CubePieceData("gan_cube_model/ULB.obj"), CubePieceData("gan_cube_model/UB.obj"),
+    CubePieceData("gan_cube_model/URB.obj"), CubePieceData("gan_cube_model/UR.obj"),  CubePieceData("gan_cube_model/U.obj"),
+    CubePieceData("gan_cube_model/F.obj"),   CubePieceData("gan_cube_model/RF.obj"),  CubePieceData("gan_cube_model/R.obj"),
+    CubePieceData("gan_cube_model/RB.obj"),  CubePieceData("gan_cube_model/B.obj"),   CubePieceData("gan_cube_model/LB.obj"),
+    CubePieceData("gan_cube_model/L.obj"),   CubePieceData("gan_cube_model/LF.obj"),
+    CubePieceData("gan_cube_model/DRF.obj"), CubePieceData("gan_cube_model/DF.obj"),  CubePieceData("gan_cube_model/DLF.obj"),
+    CubePieceData("gan_cube_model/DL.obj"),  CubePieceData("gan_cube_model/DLB.obj"), CubePieceData("gan_cube_model/DB.obj"),
+    CubePieceData("gan_cube_model/DRB.obj"), CubePieceData("gan_cube_model/DR.obj"),  CubePieceData("gan_cube_model/D.obj"),
 )
