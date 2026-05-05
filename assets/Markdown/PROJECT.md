@@ -2,7 +2,7 @@
 
 This document captures everything a developer should know to work on QBSmarter productively without re-deriving it from the source. It covers architecture, decisions, conventions, and the protocol details that aren't obvious from reading individual files.
 
-> **Audience.** A new contributor (or future-you) who knows Kotlin and Compose Multiplatform but doesn't know this codebase. Read top-to-bottom once; after that, the inline comments in the source assume you've seen the big picture here.
+> **Audience.** A new contributor who knows Kotlin and Compose Multiplatform and wants to learn about this codebas. Read top-to-bottom once; after that, the inline comments in the source assume you've seen the big picture here.
 
 ---
 
@@ -38,7 +38,7 @@ This document captures everything a developer should know to work on QBSmarter p
 
 ## What QBSmarter is
 
-QBSmarter is an **Android-first Compose Multiplatform** companion app for the **GAN 356 i Carry** smart speedcube. It connects via **Bluetooth Low Energy (BLE)** using the **GAN Gen2** protocol, renders the cube in 3D with the **korender** engine, and provides:
+QBSmarter is an **Android-first Compose Multiplatform** companion app for **GAN** smart cubes. It connects via **Bluetooth Low Energy (BLE)** using the **GAN Gen2** &ndash; **Gen4** protocols, renders the cube in 3D with the **korender** engine, and provides:
 
 - a **Solve** screen (live cube view, scramble generator, scramble progress with deviation correction, inspection countdown, timer, post-solve penalty/DNF, stat tiles, personal-best celebration),
 - a **Devices** screen (scan, pair, reconnect, forget, per-cube battery, cube info dialog),
