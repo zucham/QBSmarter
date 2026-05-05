@@ -1,0 +1,91 @@
+-- Recorded solve. Scoped to a profile (user_id). Insert-only on the timer
+-- side; rows can be deleted from the History screen.
+--
+-- Penalty/DNF semantics:
+--   • is_dnf = 1: solve is a Did-Not-Finish. duration_ms still recorded
+--     for reference but UI shows "DNF" instead of the number, and stats
+--     (best/mean/AoN) skip these rows.
+--   • penalty_ms (typically 2000): a "+2" penalty added to the displayed
+--     duration. The raw duration_ms is the un-penalised time; the
+--     effective time is duration_ms + penalty_ms. Stats use the
+--     effective time.
+-- Both columns default to 0 – i.e. a fresh solve is neither DNF nor +2.
+--
+-- move_count: total cube turns recorded during the solve. Already
+-- counted at runtime by SolveViewModel for the live TPS calculation
+-- (`fluency = moveCount * 1000.0 / durationMs`). Persisting it lets the
+-- History detail dialog surface "turns: N" without recomputing from a
+-- gesture stream we no longer have. Defaults to 0 so old call sites
+-- (e.g. tests inserting via the repo without the new field) keep
+-- compiling. Not used by any stat – it's a History-only field by
+-- product spec.
+
+CREATE TABLE solves (
+    id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    solved_at INTEGER NOT NULL,
+    duration_ms INTEGER NOT NULL,
+    scramble TEXT NOT NULL,
+    ao5_ms INTEGER,
+    fluency REAL,
+    extras TEXT,
+    is_dnf INTEGER NOT NULL DEFAULT 0,
+    penalty_ms INTEGER NOT NULL DEFAULT 0,
+    move_count INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE INDEX solves_user_solved_at ON solves(user_id, solved_at DESC);
+CREATE INDEX solves_user_duration ON solves(user_id, duration_ms ASC);
+
+insert:
+INSERT INTO solves (user_id, solved_at, duration_ms, scramble, ao5_ms, fluency, extras, is_dnf, penalty_ms, move_count)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+-- SQLite-specific: returns the id of the most recently INSERTed row in
+-- the current connection. Used immediately after `insert` (in the same
+-- transaction) to surface the new solve's id back to the caller.
+lastInsertedId:
+SELECT last_insert_rowid();
+
+deleteById:
+DELETE FROM solves WHERE id = :id;
+
+countAll:
+SELECT COUNT(*) FROM solves WHERE user_id = :userId;
+
+bestDuration:
+-- Skips DNF rows. Effective time = duration_ms + penalty_ms.
+-- The explicit `AS best` alias gives the generated row class a stable
+-- Kotlin property name, so changes to the SELECT expression don't
+-- silently rename the property.
+SELECT MIN(duration_ms + penalty_ms) AS best FROM solves
+WHERE user_id = :userId AND is_dnf = 0;
+
+recentForStats:
+SELECT * FROM solves WHERE user_id = :userId
+ORDER BY solved_at DESC LIMIT :n;
+
+pageByDateDesc:
+SELECT * FROM solves WHERE user_id = :userId
+ORDER BY solved_at DESC LIMIT :limit OFFSET :offset;
+
+pageByDateAsc:
+SELECT * FROM solves WHERE user_id = :userId
+ORDER BY solved_at ASC LIMIT :limit OFFSET :offset;
+
+pageByDurationAsc:
+-- Best ordering: DNFs go to the bottom regardless of recorded ms;
+-- among non-DNFs, effective time (duration_ms + penalty_ms) ascending.
+SELECT * FROM solves WHERE user_id = :userId
+ORDER BY is_dnf ASC, (duration_ms + penalty_ms) ASC LIMIT :limit OFFSET :offset;
+
+pageByDurationDesc:
+-- Worst ordering: DNFs go to the top (treated as "very bad"), then
+-- non-DNFs by effective time descending.
+SELECT * FROM solves WHERE user_id = :userId
+ORDER BY is_dnf DESC, (duration_ms + penalty_ms) DESC LIMIT :limit OFFSET :offset;
+
+updatePenalty:
+-- Mark a solve as DNF, +2, or back to OK. Called from the post-solve
+-- buttons or from the History detail dialog (future).
+UPDATE solves SET is_dnf = :isDnf, penalty_ms = :penaltyMs WHERE id = :id;

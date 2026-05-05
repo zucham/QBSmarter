@@ -1,0 +1,24 @@
+-- App-global state – anything that is NOT scoped to a profile. Today the
+-- only such state is the active profile pointer; future additions might
+-- include "did the user dismiss the X tutorial" or app-version stamps.
+--
+-- The single-row pattern: PRIMARY KEY is a constant 0 so this table can
+-- hold at most one row. INSERT-OR-IGNORE bootstraps; UPDATE mutates.
+
+CREATE TABLE app_state (
+    id INTEGER NOT NULL PRIMARY KEY DEFAULT 0,
+    active_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+    CHECK (id = 0)
+);
+
+selectActiveUserId:
+SELECT active_user_id FROM app_state WHERE id = 0;
+
+-- Two-step bootstrap so we can call this once at startup safely:
+--   1. INSERT OR IGNORE the singleton row with NULL pointer
+--   2. UPDATE the pointer to the chosen user
+ensureRow:
+INSERT OR IGNORE INTO app_state (id, active_user_id) VALUES (0, NULL);
+
+setActiveUserId:
+UPDATE app_state SET active_user_id = :userId WHERE id = 0;

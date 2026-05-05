@@ -1,0 +1,482 @@
+package com.zucham.qbsmarter.ui.screens.history
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.wrapContentHeight
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.SwipeToDismissBox
+import androidx.compose.material3.SwipeToDismissBoxValue
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberSwipeToDismissBoxState
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.zucham.qbsmarter.data.db.SolveRow
+import com.zucham.qbsmarter.data.db.SolveSort
+import com.zucham.qbsmarter.ui.components.ConfirmationDialog
+import com.zucham.qbsmarter.ui.components.VerticalScrollbarBox
+import com.zucham.qbsmarter.util.formatDuration
+import com.zucham.qbsmarter.util.formatTps
+import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.first
+import kotlinx.datetime.TimeZone
+import kotlinx.datetime.toLocalDateTime
+import org.jetbrains.compose.resources.stringResource
+import org.koin.compose.viewmodel.koinViewModel
+import qbsmarter.shared.generated.resources.Res
+import qbsmarter.shared.generated.resources.devices_cancel
+import qbsmarter.shared.generated.resources.history_close
+import qbsmarter.shared.generated.resources.history_date
+import qbsmarter.shared.generated.resources.history_delete
+import qbsmarter.shared.generated.resources.history_delete_message
+import qbsmarter.shared.generated.resources.history_delete_title
+import qbsmarter.shared.generated.resources.history_scramble_label
+import qbsmarter.shared.generated.resources.history_sort_fastest
+import qbsmarter.shared.generated.resources.history_sort_newest
+import qbsmarter.shared.generated.resources.history_sort_oldest
+import qbsmarter.shared.generated.resources.history_sort_worst
+import qbsmarter.shared.generated.resources.history_swipe_hint
+import qbsmarter.shared.generated.resources.history_total_one
+import qbsmarter.shared.generated.resources.history_total_other
+import qbsmarter.shared.generated.resources.history_turns
+import qbsmarter.shared.generated.resources.stat_ao5
+import qbsmarter.shared.generated.resources.stat_fluency
+
+/**
+ * History screen. Renders the loaded window of solves into a [LazyColumn]
+ * and asks the VM to extend the window when the user scrolls within
+ * [PREFETCH_TRIGGER] items of the bottom.
+ *
+ * Pagination is a plain `StateFlow` window (see [HistoryViewModel]) – no
+ * paging library involved.
+ */
+@Composable
+fun HistoryScreen() {
+    val vm: HistoryViewModel = koinViewModel()
+    val sort by vm.sort.collectAsState()
+    val items by vm.items.collectAsState()
+    val loading by vm.loading.collectAsState()
+    val atEnd by vm.atEnd.collectAsState()
+    val total by vm.totalCount.collectAsState()
+    val listState = rememberLazyListState()
+
+    // Refresh whenever the screen re-enters composition – picks up rows
+    // inserted by the timer while we were elsewhere – AND scroll the list
+    // back to the top.
+    //
+    // Why we can't rely on `LaunchedEffect(sort)` alone for entry: navigation
+    // restores the previous `LazyListState` (saveState/restoreState pattern
+    // wired in AppNavHost) so coming back to History from another screen
+    // can land the user mid-list. Sort hasn't changed, so the sort-change
+    // effect doesn't fire either. This effect explicitly scrolls to the
+    // top whenever the screen re-enters, then waits for the refresh-driven
+    // load cycle to commit so a final `scrollToItem(0)` lands on the
+    // actually-first row of the freshly loaded data (same robustness
+    // pattern as the sort-change effect below – see its docs for the
+    // emptyList-intermediate rationale).
+    LaunchedEffect(Unit) {
+        listState.scrollToItem(0)
+        vm.refresh()
+        scrollToTopAfterLoadCycle(listState, vm)
+    }
+
+    // Sort changes start the user back at the top. Same wait-for-load-cycle
+    // approach as the screen-entry effect above.
+    LaunchedEffect(sort) {
+        listState.scrollToItem(0)
+        scrollToTopAfterLoadCycle(listState, vm)
+    }
+
+    // Watch the visible window; ask for more when close to the bottom.
+    // Keying just on listState – the snapshotFlow re-reads layoutInfo
+    // and the VM state (items/loading/atEnd) on every emission, so we
+    // don't need to relaunch the effect on those changes.
+    LaunchedEffect(listState) {
+        snapshotFlow {
+            val layoutInfo = listState.layoutInfo
+            val lastVisible = layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
+            val total = layoutInfo.totalItemsCount
+            (total - lastVisible).coerceAtLeast(0)
+        }
+            .collect { distanceFromEnd ->
+                if (distanceFromEnd <= PREFETCH_TRIGGER) {
+                    // VM coalesces concurrent calls and short-circuits
+                    // when already loading or at-end.
+                    vm.maybeLoadMore()
+                }
+            }
+    }
+
+    var detail by remember { mutableStateOf<SolveRow?>(null) }
+    var pendingDelete by remember { mutableStateOf<SolveRow?>(null) }
+
+    Column(modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 8.dp)) {
+        // Total count header. Two keys (one / other) so locales with
+        // different plural rules can render the count correctly.
+        val totalKey = if (total == 1L) Res.string.history_total_one
+                       else Res.string.history_total_other
+        Text(
+            text = stringResource(totalKey, total.toInt()),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(bottom = 6.dp),
+        )
+
+        SortBar(sort, vm::setSort)
+        Text(
+            stringResource(Res.string.history_swipe_hint),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 8.dp, bottom = 4.dp),
+        )
+
+        // VerticalScrollbarBox draws the scrollbar in its own gutter
+        // alongside the LazyColumn. The gutterEnd value it hands back is
+        // the right padding the LazyColumn applies so its rows don't
+        // sit under the scrollbar track.
+        VerticalScrollbarBox(
+            state = listState,
+            modifier = Modifier.fillMaxSize().padding(top = 4.dp),
+        ) { gutterEnd ->
+            LazyColumn(
+                state = listState,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(end = gutterEnd),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                items(items = items, key = { it.id }) { row ->
+                    SwipeableSolveItem(
+                        row = row,
+                        pendingDeleteId = pendingDelete?.id,
+                        onTap = { detail = row },
+                        onSwipedToDelete = { pendingDelete = row },
+                    )
+                }
+                if (loading && !atEnd) {
+                    item {
+                        Box(
+                            modifier = Modifier.fillMaxWidth().padding(16.dp),
+                            contentAlignment = Alignment.Center,
+                        ) { CircularProgressIndicator(modifier = Modifier.size(24.dp)) }
+                    }
+                }
+            }
+        }
+    }
+
+    detail?.let { row ->
+        SolveDetailDialog(row, onDelete = { pendingDelete = row }, onDismiss = { detail = null })
+    }
+
+    pendingDelete?.let { row ->
+        ConfirmationDialog(
+            title = stringResource(Res.string.history_delete_title),
+            message = stringResource(Res.string.history_delete_message),
+            confirmLabel = stringResource(Res.string.history_delete),
+            cancelLabel = stringResource(Res.string.devices_cancel),
+            onConfirm = {
+                vm.delete(row.id)
+                pendingDelete = null
+                detail = null
+            },
+            onDismiss = { pendingDelete = null },
+        )
+    }
+}
+
+/** Distance-from-bottom (in items) that triggers another window expansion. */
+private const val PREFETCH_TRIGGER = 10
+
+/**
+ * Wait for the VM's load cycle to fully commit, then snap the list back
+ * to the top.
+ *
+ * The reset-then-reload sequence inside the VM is:
+ *   1. _loading.value = true
+ *   2. _items.value = emptyList() (briefly, while the page query runs)
+ *   3. _items.value = <new rows>
+ *   4. _loading.value = false
+ *
+ * Earlier code did `vm.items.drop(1).first()` to wait for "the next items
+ * emission". That worked on fast devices where a single emission
+ * corresponded to "new sort applied", but on slow devices the LazyColumn
+ * could observe the empty-list intermediate emission first – we'd
+ * `scrollToItem(0)` against an empty list and then the populated list
+ * would land, with LazyColumn snapping to whichever item-key offset its
+ * saver had remembered (often somewhere mid-list).
+ *
+ * Robust approach: wait for the full loading cycle to complete (`loading`
+ * cycling false → true → false). At that point the new page has been
+ * committed to `_items` and a final `scrollToItem(0)` is guaranteed to
+ * land on the actually-first row of the new list. If the screen entered
+ * before the VM started loading, the initial `false` is harmlessly
+ * skipped by `drop(1)`.
+ */
+private suspend fun scrollToTopAfterLoadCycle(
+    listState: LazyListState,
+    vm: HistoryViewModel,
+) {
+    vm.loading
+        .drop(1)
+        .first { it }   // wait for loading=true (cycle start)
+    vm.loading
+        .first { !it }  // wait for loading=false (cycle end)
+    listState.scrollToItem(0)
+}
+
+@OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
+@Composable
+private fun SortBar(sort: SolveSort, onChange: (SolveSort) -> Unit) {
+    FlowRow(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        SortChip(sort == SolveSort.DATE_DESC, stringResource(Res.string.history_sort_newest)) {
+            onChange(SolveSort.DATE_DESC)
+        }
+        SortChip(sort == SolveSort.DATE_ASC, stringResource(Res.string.history_sort_oldest)) {
+            onChange(SolveSort.DATE_ASC)
+        }
+        SortChip(sort == SolveSort.BEST_TIME, stringResource(Res.string.history_sort_fastest)) {
+            onChange(SolveSort.BEST_TIME)
+        }
+        SortChip(sort == SolveSort.WORST_TIME, stringResource(Res.string.history_sort_worst)) {
+            onChange(SolveSort.WORST_TIME)
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SortChip(selected: Boolean, label: String, onClick: () -> Unit) {
+    FilterChip(
+        selected = selected,
+        onClick = onClick,
+        label = { Text(label, fontSize = 12.sp, maxLines = 1) },
+        modifier = Modifier.wrapContentHeight(),
+        colors = FilterChipDefaults.filterChipColors(),
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SwipeableSolveItem(
+    row: SolveRow,
+    pendingDeleteId: Long?,
+    onTap: () -> Unit,
+    onSwipedToDelete: () -> Unit,
+) {
+    val state = rememberSwipeToDismissBoxState(
+        positionalThreshold = { totalDistance -> totalDistance * 0.33f },
+    )
+
+    LaunchedEffect(state.currentValue) {
+        if (state.currentValue == SwipeToDismissBoxValue.StartToEnd) {
+            onSwipedToDelete()
+        }
+    }
+
+    LaunchedEffect(pendingDeleteId, row.id) {
+        if (pendingDeleteId != row.id && state.currentValue != SwipeToDismissBoxValue.Settled) {
+            state.reset()
+        }
+    }
+
+    SwipeToDismissBox(
+        state = state,
+        enableDismissFromStartToEnd = true,
+        enableDismissFromEndToStart = false,
+        backgroundContent = { SwipeBackground() },
+    ) {
+        SolveListItem(row, onClick = onTap)
+    }
+}
+
+@Composable
+private fun SwipeBackground() {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(
+                color = MaterialTheme.colorScheme.errorContainer,
+                shape = RoundedCornerShape(8.dp),
+            )
+            .padding(horizontal = 24.dp),
+        contentAlignment = Alignment.CenterStart,
+    ) {
+        Text(
+            text = stringResource(Res.string.history_delete),
+            color = MaterialTheme.colorScheme.onErrorContainer,
+            fontWeight = FontWeight.Bold,
+        )
+    }
+}
+
+@Composable
+private fun SolveListItem(row: SolveRow, onClick: () -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
+        // surfaceContainerLow is one step above the page background in
+        // both modes – darker than the page in light mode (page is
+        // surface = #FFFFFF; this is #F2F2F6) and lighter than the
+        // page in dark mode (page is background = #0B0B0D; this is
+        // #1A1A1D). Material 3's default Card color
+        // (surfaceContainerHigh) was too dark for a list item that
+        // sits on a page background in both modes; the previous
+        // surfaceContainerLowest override was *too light* in light
+        // mode (basically the page color) and *too dark* in dark
+        // mode (below page brightness), so it failed both tasks.
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+        shape = RoundedCornerShape(8.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Text(
+                text = displayDuration(row),
+                fontWeight = FontWeight.Bold,
+                fontFamily = FontFamily.Monospace,
+                fontSize = 24.sp,
+                color = if (row.isDnf) MaterialTheme.colorScheme.error
+                else MaterialTheme.colorScheme.onSurface,
+            )
+            Column(horizontalAlignment = Alignment.End) {
+                Text(
+                    text = formatDate(row.solvedAt),
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                row.ao5Ms?.let {
+                    Text(
+                        text = stringResource(Res.string.stat_ao5) + " " + formatDuration(it),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Display a solve's time according to its DNF/penalty state:
+ *   - DNF → "DNF"
+ *   - Has +2 → "X.XX+" (effective time + plus marker)
+ *   - Otherwise raw effective time
+ */
+private fun displayDuration(row: SolveRow): String = when {
+    row.isDnf -> "DNF"
+    row.penaltyMs > 0 -> formatDuration(row.effectiveMs) + "+"
+    else -> formatDuration(row.effectiveMs)
+}
+
+@Composable
+private fun SolveDetailDialog(row: SolveRow, onDelete: () -> Unit, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(displayDuration(row)) },
+        text = {
+            Column {
+                Row (horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(stringResource(Res.string.history_date) + ": ", fontWeight = FontWeight.Black)
+                    Text(formatDate(row.solvedAt))
+                }
+                Text(
+                    stringResource(Res.string.history_scramble_label),
+                    fontWeight = FontWeight.Black,
+                    modifier = Modifier.padding(top = 8.dp),
+                )
+                Text(row.scramble, fontFamily = FontFamily.Monospace)
+                row.ao5Ms?.let {
+                    Row (horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(stringResource(Res.string.stat_ao5) + ": ", fontWeight = FontWeight.Black)
+                        Text(formatDuration(it))
+                    }
+                }
+                row.fluency?.let {
+                    Row {
+                        Text(stringResource(Res.string.stat_fluency) + ":  ", fontWeight = FontWeight.Black)
+                        Text(formatTps(it))
+                    }
+                }
+                // Total turns recorded during the solve. The 0-guard
+                // hides the row for solves that pre-date the
+                // moveCount column (default-0 by SQL) so we don't
+                // misleadingly show "Turns: 0" for genuine pre-feature
+                // data. New solves – including ones with a single
+                // recorded turn – pass the guard normally.
+                if (row.moveCount > 0) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(
+                            stringResource(Res.string.history_turns) + ": ",
+                            fontWeight = FontWeight.Black,
+                        )
+                        Text(row.moveCount.toString())
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDelete) {
+                Text(
+                    stringResource(Res.string.history_delete),
+                    color = MaterialTheme.colorScheme.error,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(
+                    stringResource(Res.string.history_close),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        },
+    )
+}
+
+private fun formatDate(epochMs: Long): String {
+    val dt = kotlin.time.Instant.fromEpochMilliseconds(epochMs).toLocalDateTime(TimeZone.currentSystemDefault())
+    return "${dt.date} ${dt.hour.toString().padStart(2, '0')}:${dt.minute.toString().padStart(2, '0')}"
+}

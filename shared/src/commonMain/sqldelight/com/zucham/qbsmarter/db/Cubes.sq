@@ -1,0 +1,54 @@
+-- One row per paired smart cube, scoped to a profile (user_id). Hardware
+-- info columns (hw_version, sw_version, gyro_supported) are populated
+-- after the cube's INFO round-trip; nullable for the brief window before
+-- that lands and for non-GAN drivers that may never report them.
+--
+-- gyro_supported is INTEGER for SQLite-correctness (0/1/NULL); the
+-- repository maps to Boolean? at the model boundary.
+
+CREATE TABLE cubes (
+    id TEXT NOT NULL PRIMARY KEY,
+    mac TEXT NOT NULL UNIQUE,
+    name TEXT,
+    last_seen INTEGER NOT NULL,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    hw_version TEXT,
+    sw_version TEXT,
+    gyro_supported INTEGER  -- 0 = no, 1 = yes, NULL = unknown (pre-INFO)
+);
+
+CREATE INDEX cubes_user_id ON cubes(user_id);
+
+selectByUser:
+SELECT * FROM cubes WHERE user_id = :userId ORDER BY last_seen DESC;
+
+selectById:
+SELECT * FROM cubes WHERE id = :id;
+
+selectByMac:
+SELECT * FROM cubes WHERE mac = :mac;
+
+-- Upsert by MAC. On conflict we update name, last_seen, AND user_id.
+-- The user_id update is critical for multi-profile flows: a cube that
+-- was previously paired under profile A and is now being paired under
+-- profile B must transfer ownership; otherwise selectByUser(B) won't
+-- return it and the cube is invisible in B's Paired list. (The id is
+-- preserved on conflict so any in-memory references to the row stay
+-- valid.)
+upsert:
+INSERT INTO cubes (id, mac, name, last_seen, user_id)
+VALUES (:id, :mac, :name, :lastSeen, :userId)
+ON CONFLICT(mac) DO UPDATE SET
+    name = excluded.name,
+    last_seen = excluded.last_seen,
+    user_id = excluded.user_id;
+
+updateHardwareInfo:
+UPDATE cubes SET hw_version = :hwVersion, sw_version = :swVersion, gyro_supported = :gyroSupported
+WHERE mac = :mac;
+
+deleteById:
+DELETE FROM cubes WHERE id = :id;
+
+deleteAllForUser:
+DELETE FROM cubes WHERE user_id = :userId;

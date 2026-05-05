@@ -1,0 +1,31 @@
+*.iml
+.kotlin
+.gradle
+**/build/
+xcuserdata
+!src/**/build/
+local.properties
+.idea
+.fleet
+.DS_Store
+captures
+.externalNativeBuild
+.cxx
+*.xcodeproj/*
+!*.xcodeproj/project.pbxproj
+!*.xcodeproj/xcshareddata/
+!*.xcodeproj/project.xcworkspace/
+!*.xcworkspace/contents.xcworkspacedata
+**/xcshareddata/WorkspaceSettings.xcsettings
+
+# Android signing artefacts. The release keystore is private and lives
+# outside the repo; CI gets it via base64-encoded secrets. Never commit.
+*.jks
+*.keystore
+signing.properties
+keystore.properties
+
+# Build outputs that occasionally land at the repo root if a script
+# extracts them there (e.g. while testing the CI workflow locally).
+*.apk
+*.aab

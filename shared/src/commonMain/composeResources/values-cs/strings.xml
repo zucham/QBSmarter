@@ -1,0 +1,141 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">QBSmarter</string>
+    <string name="report_bug">Nahlásit chybu</string>
+
+    <string name="nav_solve">Skládání</string>
+    <string name="nav_devices">Moje kostky</string>
+    <string name="nav_history">Historie</string>
+    <string name="nav_settings">Nastavení</string>
+    <string name="nav_guide">Návod k použití</string>
+
+    <string name="guide_load_failed">Návod k použití se nepodařilo načíst.</string>
+
+    <string name="solve_new_scramble">Nový</string>
+    <string name="solve_ready">Připraveno</string>
+    <string name="solve_scramble_prompt">Zamíchejte kostku</string>
+    <string name="solve_idle">–</string>
+    <string name="solve_running">Skládání...</string>
+    <string name="solve_reset_orientation">Resetovat orientaci</string>
+    <string name="solve_reset_state">Resetovat stav</string>
+    <string name="solve_toggle_gyro">Gyro</string>
+    <string name="solve_no_cube">Žádná kostka</string>
+    <string name="solve_connect_cube">Připojit kostku</string>
+    <string name="solve_quick_overview">Stručný přehled</string>
+    <string name="solve_solved">Složeno!</string>
+    <string name="solve_tip_uu_prefix">Tip: Rychlým</string>
+    <string name="solve_tip_uu_suffix">začnete nové složení!</string>
+    <string name="solve_dnf">DNF</string>
+    <string name="solve_plus2">+2</string>
+    <string name="solve_pb_title">Nový rekord!</string>
+    <string name="solve_pb_message">Právě jste překonali svůj osobní rekord pro tento profil!</string>
+    <string name="solve_pb_dismiss">Hurá!</string>
+
+    <string name="stat_best">Osobní rekord</string>
+    <string name="stat_mean">Průměr</string>
+    <string name="stat_ao5">Ao5</string>
+    <string name="stat_ao12">Ao12</string>
+    <string name="stat_fluency">Plynulost (TPS)</string>
+    <string name="stat_steps">Fáze</string>
+    <string name="stat_total">Celkem složení</string>
+
+    <string name="devices_paired">Spárované kostky</string>
+    <string name="devices_paired_empty">Zatím žádná spárovaná kostka.</string>
+    <string name="devices_available">Dostupná zařízení</string>
+    <string name="devices_scanning">Vyhledávání zařízení…</string>
+    <string name="devices_pair">Spárovat</string>
+    <string name="devices_pair_new">Spárovat novou</string>
+    <string name="devices_go_solve">JÍT SKLÁDAT</string>
+    <string name="devices_connect">Připojit</string>
+    <string name="devices_disconnect">Odpojit</string>
+    <string name="devices_forget">Zapomenout</string>
+    <string name="devices_cancel">Zrušit</string>
+    <string name="devices_connecting">Připojování…</string>
+    <string name="devices_connected">Připojeno</string>
+    <string name="devices_disconnected">Odpojeno</string>
+    <string name="devices_forget_title">Zapomenout kostku?</string>
+    <string name="devices_forget_message">Chcete tuto kostku odebrat ze seznamu spárovaných zařízení? Můžete ji znovu spárovat později.</string>
+    <string name="devices_unknown">Neznámé</string>
+    <string name="devices_no_permissions">Pro vyhledávání a spárování kostek je potřeba aplikaci povolit oprávnění na používání Bluetooth.</string>
+    <string name="devices_bt_disabled">Bluetooth je vypnutý. Zapněte ho pro vyhledávání a spárování kostek.</string>
+    <string name="devices_bt_enable">Zapnout Bluetooth</string>
+    <string name="devices_info">Info</string>
+    <string name="devices_detail_mac">MAC</string>
+    <string name="devices_detail_hw">Verze hardwaru</string>
+    <string name="devices_detail_sw">Verze softwaru</string>
+    <string name="devices_detail_gyro">Gyroskop</string>
+    <string name="devices_detail_gyro_yes">Ano</string>
+    <string name="devices_detail_gyro_no">Ne</string>
+    <string name="devices_detail_gyro_unknown">Neznámý</string>
+    <string name="devices_detail_battery">Stav baterie</string>
+
+    <string name="history_sort_newest">Nejnovější</string>
+    <string name="history_sort_oldest">Nejstarší</string>
+    <string name="history_sort_fastest">Nejlepší</string>
+    <string name="history_sort_worst">Nejhorší</string>
+    <string name="history_delete_title">Smazat složení?</string>
+    <string name="history_delete_message">Toto složení bude trvale odstraněno.</string>
+    <string name="history_close">Zavřít</string>
+    <string name="history_delete">Smazat</string>
+    <string name="history_date">Datum</string>
+    <string name="history_scramble_label">Zamíchání:</string>
+    <string name="history_turns">Otáčky</string>
+    <string name="history_swipe_hint">Záznam smažete posunutím doprava</string>
+    <string name="history_total_one">Celkem %1$d složení</string>
+    <string name="history_total_other">Celkem %1$d složení</string>
+
+    <string name="settings_section_solving">Skládání</string>
+    <string name="settings_section_display">Zobrazení</string>
+    <string name="settings_section_data">Správa profilových dat</string>
+    <string name="settings_section_data_explanation">Umožnuje importovat a exportovat současný aktivní profil. Obsahuje připojená zařízení, veškerá nastavení a kompletní historii složení.</string>
+    <string name="settings_section_about">O aplikaci</string>
+    <string name="settings_section_profile">Profil</string>
+    <string name="settings_section_advanced">Pokročilé</string>
+    <string name="settings_inspection">15s čas na prohlédnutí</string>
+    <string name="settings_sound">Zvukové efekty</string>
+    <string name="settings_keep_screen_on">Nevypínat obrazovku při skládání</string>
+    <string name="settings_export">Exportovat profil</string>
+    <string name="settings_import">Importovat profil</string>
+    <string name="settings_status_no_active_profile">Žádný aktivní profil k exportu.</string>
+    <string name="settings_status_profile_not_found">Profil nebyl nalezen.</string>
+    <string name="settings_status_exported">Exportováno.</string>
+    <string name="settings_status_export_cancelled">Export zrušen.</string>
+    <string name="settings_status_imported">Importováno.</string>
+    <string name="settings_status_import_cancelled">Import zrušen.</string>
+    <string name="settings_status_import_failed">Import selhal: %1$s</string>
+    <string name="settings_user_id">ID uživatele:</string>
+    <string name="settings_version">Verze:</string>
+    <string name="settings_display_name">Zobrazované jméno</string>
+    <string name="settings_display_name_placeholder">Anonymní řešitel</string>
+    <string name="settings_language">Volba jazyka</string>
+    <string name="settings_theme">Vzhled</string>
+    <string name="settings_theme_color">Barva</string>
+    <string name="settings_cache_enabled">Používat mezipaměť</string>
+    <string name="settings_cache_explanation">Zrychluje přechody mezi obrazovkami uložením často používaných dat do paměti. Může vést k nepatrně vyšší spotřebě paměti. Pro optimální zážitek nechte použití mezipaměti zapnuté.</string>
+
+    <string name="profile_active">Aktivní</string>
+    <string name="profile_default_name">Nový profil</string>
+    <string name="profile_create">Vytvořit profil</string>
+    <string name="profile_delete">Smazat profil</string>
+    <string name="profile_delete_title">Smazat profil?</string>
+    <string name="profile_delete_message">Všechny kostky, historie složení a nastavení pro tento profil budou trvale odstraněny.</string>
+    <string name="profile_create_title">Nový profil</string>
+    <string name="profile_create_hint">Pokud nezadáte jméno, použije se výchozí.</string>
+    <string name="profile_ok">Vytvořit</string>
+    <string name="profile_edit_hint">Přepínejte mezi profily klepnutím na požadovanou položku, nebo klepněte na ikonu ozubeného kola u profilu pro úpravu jména nebo export dat profilu.</string>
+    <string name="profile_settings_title">Nastavení profilu</string>
+    <string name="profile_settings_open">Nastavení profilu</string>
+    <string name="profile_total_solves">Celkem složení: %1$d</string>
+    <string name="profile_close">Zavřít</string>
+
+    <string name="theme_mode_system">Systémový</string>
+    <string name="theme_mode_light">Světlý</string>
+    <string name="theme_mode_dark">Tmavý</string>
+
+    <string name="language_system">Systémově</string>
+    <string name="language_manual">Ručně</string>
+    <string name="language_english">English</string>
+    <string name="language_czech">Čeština</string>
+
+    <string name="guide_file">files/usage_guides/usage_guide_cs.md</string>
+</resources>

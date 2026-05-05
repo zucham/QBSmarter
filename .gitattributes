@@ -1,0 +1,21 @@
+# Auto-detect text files; convert line endings to LF on commit.
+# Keeps the repo clean when contributors join from Windows.
+* text=auto eol=lf
+
+# Gradle wrapper script must keep its LF line endings on every platform
+# (Windows users get gradlew.bat instead).
+gradlew text eol=lf
+
+# Treat known binary assets as binary so Git doesn't try to "fix" them.
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.webp  binary
+*.gif   binary
+*.ico   binary
+*.jks   binary
+*.keystore binary
+*.jar   binary
+*.war   binary
+*.apk   binary
+*.aab   binary

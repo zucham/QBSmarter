@@ -1,0 +1,34 @@
+-- Per-profile key/value store. Every setting (theme, language, inspection
+-- toggle, sound toggle, keep-screen-on, cache-enabled, …) is scoped to
+-- a user – switching profiles can therefore swap themes, languages, etc.
+--
+-- The composite primary key (user_id, key) means each profile has at
+-- most one row per key. Cascade-delete with the user.
+--
+-- App-global state that is NOT per-profile lives in app_state (active
+-- profile pointer, app version, …) – see AppState.sq.
+
+CREATE TABLE settings (
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    key TEXT NOT NULL,
+    value TEXT NOT NULL,
+    PRIMARY KEY (user_id, key)
+);
+
+CREATE INDEX settings_user_id ON settings(user_id);
+
+selectAllForUser:
+SELECT key, value FROM settings WHERE user_id = :userId;
+
+get:
+SELECT value FROM settings WHERE user_id = :userId AND key = :key;
+
+put:
+INSERT INTO settings (user_id, key, value) VALUES (:userId, :key, :value)
+ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value;
+
+remove:
+DELETE FROM settings WHERE user_id = :userId AND key = :key;
+
+deleteAllForUser:
+DELETE FROM settings WHERE user_id = :userId;

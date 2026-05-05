@@ -1,0 +1,31 @@
+-- Each row is a "profile". The app always has at least one user; on first
+-- launch UserRepository.bootstrap() creates a default one. The active
+-- profile is tracked by app_state.active_user_id (see AppState.sq).
+--
+-- A profile owns:
+--   • cubes (cubes.user_id)
+--   • solves (solves.user_id)
+--   • settings (settings.user_id) – solving toggles, theme, language…
+-- All three reference users(id) ON DELETE CASCADE so a profile delete is
+-- a single statement.
+
+CREATE TABLE users (
+    id TEXT NOT NULL PRIMARY KEY,
+    display_name TEXT,         -- nullable; UI shows "New profile" fallback
+    created_at INTEGER NOT NULL
+);
+
+selectAll:
+SELECT * FROM users ORDER BY created_at ASC;
+
+selectById:
+SELECT * FROM users WHERE id = :id;
+
+insert:
+INSERT INTO users (id, display_name, created_at) VALUES (?, ?, ?);
+
+updateDisplayName:
+UPDATE users SET display_name = :displayName WHERE id = :id;
+
+deleteById:
+DELETE FROM users WHERE id = :id;

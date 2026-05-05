@@ -1,0 +1,141 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">QBSmarter</string>
+    <string name="report_bug">Report a bug</string>
+
+    <string name="nav_solve">Solve</string>
+    <string name="nav_devices">My cubes</string>
+    <string name="nav_history">History</string>
+    <string name="nav_settings">Settings</string>
+    <string name="nav_guide">Usage guide</string>
+
+    <string name="guide_load_failed">Could not load the usage guide.</string>
+
+    <string name="solve_new_scramble">New</string>
+    <string name="solve_ready">Ready</string>
+    <string name="solve_scramble_prompt">Scramble the cube</string>
+    <string name="solve_idle">–</string>
+    <string name="solve_running">Solving...</string>
+    <string name="solve_reset_orientation">Reset orientation</string>
+    <string name="solve_reset_state">Reset state</string>
+    <string name="solve_toggle_gyro">Gyro</string>
+    <string name="solve_no_cube">No cube connected</string>
+    <string name="solve_connect_cube">Connect a cube</string>
+    <string name="solve_quick_overview">Quick overview</string>
+    <string name="solve_solved">Solved!</string>
+    <string name="solve_tip_uu_prefix">Tip: Perform a quick</string>
+    <string name="solve_tip_uu_suffix">to start a new solve!</string>
+    <string name="solve_dnf">DNF</string>
+    <string name="solve_plus2">+2</string>
+    <string name="solve_pb_title">New personal best!</string>
+    <string name="solve_pb_message">You just set a new personal record for this profile!</string>
+    <string name="solve_pb_dismiss">Hooray!</string>
+
+    <string name="stat_best">Personal best</string>
+    <string name="stat_mean">Mean</string>
+    <string name="stat_ao5">Ao5</string>
+    <string name="stat_ao12">Ao12</string>
+    <string name="stat_fluency">Fluency (TPS)</string>
+    <string name="stat_steps">Steps</string>
+    <string name="stat_total">Total solves</string>
+
+    <string name="devices_paired">Paired cubes</string>
+    <string name="devices_paired_empty">No paired cubes yet.</string>
+    <string name="devices_available">Available devices</string>
+    <string name="devices_scanning">Scanning for devices…</string>
+    <string name="devices_pair">Pair</string>
+    <string name="devices_pair_new">Pair new</string>
+    <string name="devices_go_solve">GO SOLVE</string>
+    <string name="devices_connect">Connect</string>
+    <string name="devices_disconnect">Disconnect</string>
+    <string name="devices_forget">Forget</string>
+    <string name="devices_cancel">Cancel</string>
+    <string name="devices_connecting">Connecting…</string>
+    <string name="devices_connected">Connected</string>
+    <string name="devices_disconnected">Disconnected</string>
+    <string name="devices_forget_title">Forget cube?</string>
+    <string name="devices_forget_message">Remove this cube from this device. You can pair it again later.</string>
+    <string name="devices_unknown">Unknown</string>
+    <string name="devices_no_permissions">Bluetooth permissions are required to scan for cubes and pair them.</string>
+    <string name="devices_bt_disabled">Bluetooth is turned off. Enable it to scan for cubes and pair them.</string>
+    <string name="devices_bt_enable">Enable Bluetooth</string>
+    <string name="devices_info">Info</string>
+    <string name="devices_detail_mac">MAC</string>
+    <string name="devices_detail_hw">Hardware version</string>
+    <string name="devices_detail_sw">Software version</string>
+    <string name="devices_detail_gyro">Gyro</string>
+    <string name="devices_detail_gyro_yes">Yes</string>
+    <string name="devices_detail_gyro_no">No</string>
+    <string name="devices_detail_gyro_unknown">Unknown</string>
+    <string name="devices_detail_battery">Battery level</string>
+
+    <string name="history_sort_newest">Newest</string>
+    <string name="history_sort_oldest">Oldest</string>
+    <string name="history_sort_fastest">Best</string>
+    <string name="history_sort_worst">Worst</string>
+    <string name="history_delete_title">Delete solve?</string>
+    <string name="history_delete_message">This solve will be permanently removed.</string>
+    <string name="history_close">Close</string>
+    <string name="history_delete">Delete</string>
+    <string name="history_date">Date</string>
+    <string name="history_scramble_label">Scramble:</string>
+    <string name="history_turns">Turns</string>
+    <string name="history_swipe_hint">Delete a record by swiping it right</string>
+    <string name="history_total_one">%1$d solve total</string>
+    <string name="history_total_other">%1$d solves total</string>
+
+    <string name="settings_section_solving">Solving</string>
+    <string name="settings_section_display">Display</string>
+    <string name="settings_section_data">Profile data management</string>
+    <string name="settings_section_data_explanation">Allows for easy import and export of data from the currently active profile. Contains saved devices, all the settings as well as the complete solve history.</string>
+    <string name="settings_section_about">About</string>
+    <string name="settings_section_profile">Profile</string>
+    <string name="settings_section_advanced">Advanced</string>
+    <string name="settings_inspection">15s inspection time</string>
+    <string name="settings_sound">Sound effects</string>
+    <string name="settings_keep_screen_on">Keep screen on while solving</string>
+    <string name="settings_export">Export profile</string>
+    <string name="settings_import">Import profile</string>
+    <string name="settings_status_no_active_profile">No active profile to export.</string>
+    <string name="settings_status_profile_not_found">Profile not found.</string>
+    <string name="settings_status_exported">Exported.</string>
+    <string name="settings_status_export_cancelled">Export cancelled.</string>
+    <string name="settings_status_imported">Imported.</string>
+    <string name="settings_status_import_cancelled">Import cancelled.</string>
+    <string name="settings_status_import_failed">Import failed: %1$s</string>
+    <string name="settings_user_id">User ID:</string>
+    <string name="settings_version">Version:</string>
+    <string name="settings_display_name">Display name</string>
+    <string name="settings_display_name_placeholder">Anonymous cuber</string>
+    <string name="settings_language">Language selection</string>
+    <string name="settings_theme">Theme</string>
+    <string name="settings_theme_color">Color</string>
+    <string name="settings_cache_enabled">Use caching</string>
+    <string name="settings_cache_explanation">Speeds up screen transitions by holding hot data in memory. May lead to slight memory consumption increase. Leave this setting on for optimal experience.</string>
+
+    <string name="profile_active">Active</string>
+    <string name="profile_default_name">New profile</string>
+    <string name="profile_create">Create profile</string>
+    <string name="profile_delete">Delete profile</string>
+    <string name="profile_delete_title">Delete profile?</string>
+    <string name="profile_delete_message">All cubes, solves, and settings for this profile will be permanently removed.</string>
+    <string name="profile_create_title">New profile</string>
+    <string name="profile_create_hint">Leave the name blank to keep the default.</string>
+    <string name="profile_ok">Create</string>
+    <string name="profile_edit_hint">Switch between profiles by tapping on the desired item, or tap a profile's gear icon to edit its name or export it.</string>
+    <string name="profile_settings_title">Profile settings</string>
+    <string name="profile_settings_open">Profile settings</string>
+    <string name="profile_total_solves">Total solves: %1$d</string>
+    <string name="profile_close">Close</string>
+
+    <string name="theme_mode_system">System</string>
+    <string name="theme_mode_light">Light</string>
+    <string name="theme_mode_dark">Dark</string>
+
+    <string name="language_system">By system</string>
+    <string name="language_manual">Manual</string>
+    <string name="language_english">English</string>
+    <string name="language_czech">Čeština</string>
+
+    <string name="guide_file">files/usage_guides/usage_guide_en.md</string>
+</resources>
