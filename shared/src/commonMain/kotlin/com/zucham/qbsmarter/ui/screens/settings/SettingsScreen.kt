@@ -81,6 +81,7 @@ import org.jetbrains.compose.resources.stringResource
 import org.koin.compose.koinInject
 import org.koin.compose.viewmodel.koinViewModel
 import qbsmarter.shared.generated.resources.Res
+import qbsmarter.shared.generated.resources.app_version
 import qbsmarter.shared.generated.resources.devices_cancel
 import qbsmarter.shared.generated.resources.language_czech
 import qbsmarter.shared.generated.resources.language_english
@@ -235,7 +236,7 @@ fun SettingsScreen() {
                 )
                 SelectionContainer {
                     Text(
-                        "1.0.0",
+                        stringResource(Res.string.app_version),
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }

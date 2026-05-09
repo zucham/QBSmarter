@@ -1,6 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">QBSmarter</string>
+    <!--Language-independent system strings that should not be changed or redeclared in translated/localized versions of this file-->
+        <string name="app_name">QBSmarter</string>
+        <string name="app_version">v1.0.2</string>
+    <!--End of language-independent system strings-->
+
     <string name="report_bug">Report a bug</string>
 
     <string name="nav_solve">Solve</string>

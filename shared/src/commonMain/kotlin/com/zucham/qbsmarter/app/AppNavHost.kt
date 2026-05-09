@@ -23,6 +23,7 @@ import org.koin.compose.koinInject
 import org.koin.compose.viewmodel.koinViewModel
 import qbsmarter.shared.generated.resources.Res
 import qbsmarter.shared.generated.resources.app_name
+import qbsmarter.shared.generated.resources.app_version
 import qbsmarter.shared.generated.resources.nav_devices
 import qbsmarter.shared.generated.resources.nav_guide
 import qbsmarter.shared.generated.resources.nav_history
@@ -56,6 +57,7 @@ fun AppNavHost() {
     val settingsLabel = stringResource(Res.string.nav_settings)
     val guideLabel = stringResource(Res.string.nav_guide)
     val appName = stringResource(Res.string.app_name)
+    val appVersion = stringResource(Res.string.app_version)
     val vm: SettingsViewModel = koinViewModel()
     val user by vm.user.collectAsState()
 
@@ -100,7 +102,7 @@ fun AppNavHost() {
         title = routeTitle,
         drawerEntries = drawerEntries,
         currentRoute = currentRoute,
-        appVersion = "v1.0.0",
+        appVersion = appVersion,
         currentProfileName = activeProfileName,
         onSelectRoute = { route ->
             if (currentRoute != route) {

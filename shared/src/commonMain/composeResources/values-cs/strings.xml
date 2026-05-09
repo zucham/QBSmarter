@@ -1,6 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">QBSmarter</string>
     <string name="report_bug">Nahlásit chybu</string>
 
     <string name="nav_solve">Skládání</string>
