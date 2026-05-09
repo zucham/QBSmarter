@@ -1,7 +1,7 @@
 # Blender 5.0.1
 # www.blender.org
 
-mtllib UR.mtl
+mtllib material.mtl
 o edge_UR
 v 0.137231 0.137076 0.100163
 v 0.137231 0.295334 0.100163

@@ -1,7 +1,7 @@
 # Blender 5.0.1
 # www.blender.org
 
-mtllib ULB.mtl
+mtllib material.mtl
 o corner_ULB
 v -0.295654 0.295654 -0.300162
 v -0.297379 0.295654 -0.299819

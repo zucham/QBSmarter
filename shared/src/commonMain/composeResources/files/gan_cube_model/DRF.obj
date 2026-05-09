@@ -1,7 +1,7 @@
 # Blender 5.0.1
 # www.blender.org
 
-mtllib DRF.mtl
+mtllib material.mtl
 o corner_DRF
 v 0.295654 -0.295654 0.300162
 v 0.295654 -0.297378 0.299819

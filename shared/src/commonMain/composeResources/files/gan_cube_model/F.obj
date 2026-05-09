@@ -1,7 +1,7 @@
 # Blender 5.0.1
 # www.blender.org
 
-mtllib F.mtl
+mtllib material.mtl
 o center_F
 v 0.000000 0.000000 0.299458
 v -0.096412 0.000000 0.299458
