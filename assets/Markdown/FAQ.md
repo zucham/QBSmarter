@@ -21,7 +21,7 @@ Any GAN smart cube that speaks the GAN Gen2, Gen3, or Gen4 BLE protocol. The
 cube the project was developed against is the **GAN 356 i Carry** (Gen2). Other
 GAN models speaking the same protocol generations should also work, although
 they have not all been individually tested. Non-GAN cubes (MoYu, QiYi, Gocube,
-Cubicle Connected, etc.) are not supported in v1.0.0.
+Cubicle Connected, etc.) are not supported yet.
 
 Adding new vendors is feasible, since the architecture has a generic
 `SmartCubeDriver` interface; see
@@ -42,7 +42,7 @@ on those older versions.
 
 ### Is the app on the Play Store?
 
-Not in v1.0.0. The recommended way to get it is to download the signed APK
+Not yet. The recommended way to get it is to download the signed APK
 from the [GitHub Releases page](https://github.com/zucham/QBSmarter/releases) and
 sideload it. 
 
@@ -92,7 +92,7 @@ by GitHub Actions from the public source code mirrored from
 [Codeberg](https://codeberg.org/zucham/QBSmarter). You can verify any release
 by:
 
-- Checking out the matching tag from Codeberg (`git checkout v1.0.0`).
+- Checking out the matching tag from Codeberg (e.g. `git checkout v1.0.2`).
 - Running `./gradlew :androidApp:assembleRelease` locally.
 - Comparing the resulting APK signature.
 

@@ -211,12 +211,12 @@ versions](assets/Markdown/PROJECT.md#build-dependencies-versions).
 
 ### What this app doesn't do (yet)
 
-- **Limited hardware support.** Only GAN smart cubes are supported in
-  v1.0.0, and only over the Gen2/3/4 BLE protocols. Other vendors or e.g. any
+- **Limited hardware support.** Only GAN smart cubes are supported for now,
+  and only over the Gen2/3/4 BLE protocols. Other vendors or e.g. any
   smart timers are not handled yet.
 - **Limited solve analysis and statistics.** The most popular speedcubing
   metrics &ndash; step times (cross, F2L, OLL, PLL), inspection time recording,
-  cumulative session graphs &ndash; aren't all in v1.0.0. This is the biggest downside
+  cumulative session graphs &ndash; aren't yet implemented. This is the biggest downside
   when compared to other similar apps. More is coming, as I promised earlier.
 - **No multiplatform yet.** Despite the Compose Multiplatform foundation,
   the only platform shipped is Android. Desktop and Web targets exist as
