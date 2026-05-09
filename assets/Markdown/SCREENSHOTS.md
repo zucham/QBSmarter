@@ -49,12 +49,12 @@ the Reset state button as well.
 
 When the cube reaches the solved state, the timer stops and the post-solve
 summary appears: final time, Ao5 snapshot, fluency (turns per second), and a
-quick row of action buttons for **+2**, **DNF**, and starting the next solve.
+quick row of action buttons for **+2** and **DNF** to mark the just-finished solve.
 A personal-best celebration is shown when the new effective time strictly beats
-the previous best for the active profile. There is a quality of life feature to start a new solve
-simply by performing a quick `U U'` move sequence.
+the previous best for the active profile. There is also a quality of life feature to start a new solve
+simply by performing a quick `U U'` move sequence on the cube.
 
->Note: this quick back-and-forth move sequence is detected regardless of the face it is perfomed on &ndash;
+>Note: this quick back-and-forth move sequence is detected regardless of the face it is performed on &ndash;
 >this feature exists to ease up the whole process, with as minimal friction with your muscle memory as possible. 
 
 ---

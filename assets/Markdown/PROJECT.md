@@ -2,7 +2,7 @@
 
 This document captures everything a developer should know to work on QBSmarter productively without re-deriving it from the source. It covers architecture, decisions, conventions, and the protocol details that aren't obvious from reading individual files.
 
-> **Audience.** A new contributor who knows Kotlin and Compose Multiplatform and wants to learn about this codebas. Read top-to-bottom once; after that, the inline comments in the source assume you've seen the big picture here.
+> **Audience.** A new contributor who knows Kotlin and Compose Multiplatform and wants to learn about this codebase. Read top-to-bottom once; after that, the inline comments in the source assume you've seen the big picture here.
 
 ---
 
@@ -86,6 +86,16 @@ QBSmarter/
 
 ### Source-set hierarchy in `shared`
 
+The actively-built source sets are:
+
+```
+common
+├── android   (real)
+└── jvm       (stubs)
+```
+
+A `webMain` directory still exists on disk under `shared/src/` from earlier development (kept as a starting point for a future revisit), but the JS and WASM-JS targets are **commented out** in `shared/build.gradle.kts` together with the `web` intermediate source-set declaration. They are not part of the current build. If web support is brought back, the intended hierarchy is:
+
 ```
 common
 ├── android   (real)
@@ -95,7 +105,7 @@ common
     └── wasmJs
 ```
 
-The `web` intermediate source set lets `js` and `wasmJs` share their stubs (`BleManager`, `DriverFactory`, `GanGen2Encryptor`, `currentTimeMillis`, `generateUuid`, etc.).
+The `web` intermediate source set was/will-be used so `js` and `wasmJs` can share their stubs (`BleManager`, `DriverFactory`, `GanEncryptor`, `currentTimeMillis`, `generateUuid`, etc.) without duplication.
 
 ### Why no `iosMain`
 
@@ -118,12 +128,12 @@ com.zucham.qbsmarter
 │   ├── cube/                   # RubiksCube, CubeState, CubeMove, CubeMoveQueue, CubeOrbiter, etc.
 │   ├── driver/                 # SmartCubeDriver/Event/Command, CubeTransport, CubeEncryptor
 │   │   └── gan/                # GanCubeDriver (Gen2/3/4), GanGeneration, GanParser interface,
-│   │                           # GanGen2Parser/Gen3Parser/Gen4Parser, BitView, GanGen2Encryptor
+│   │                           # GanGen2Parser/Gen3Parser/Gen4Parser, BitView, GanEncryptor
 │   ├── timing/                 # SolveTimer, ClockSkewEstimator
 │   └── user/                   # UserProfile data class
 ├── ui/
-│   ├── components/             # AppScaffold, NavigationDrawer, ConfirmationDialog, StatCard,
-│   │                           # VerticalScrollbar (Modifier.verticalScrollbar(state))
+│   ├── components/             # AppScaffold, NavigationDrawer, ConfirmationDialog,
+│   │                           # VerticalScrollbar (VerticalScrollbarBox composable)
 │   ├── i18n/                   # LocaleController, AppLanguage, LocaleApplier
 │   ├── screens/
 │   │   ├── devices/            # DevicesScreen, DevicesViewModel
@@ -271,7 +281,7 @@ This is the most subtle piece of BLE plumbing in the app. The order is:
 1. `devicesRepo.rememberCube(...)` – persist before anything else, so a flaky connect still leaves a row.
 2. **Tear down any existing connection first.** If `ble.connectionState.value` is `CONNECTED` or `CONNECTING`, call `ble.disconnect()` and `withTimeout(2 s) { ble.connectionState.first { it == DISCONNECTED } }`. This is the central enforcement point – every callable path that asks to connect a new cube routes through here, and `BleManager.connectToDevice`'s defensive guard backs it up by refusing if the GATT is somehow still alive.
 3. Set `_activeMac.value = device.address`. Note: this happens AFTER the teardown, not before – otherwise the long-lived Hardware/Battery event handlers (which read `_activeMac.value`) would attribute trailing events from the old cube to the new MAC.
-4. Build a `GanGen2Encryptor` from the cube's MAC. Same encryptor across all three generations – the class name is historical.
+4. Build a `GanEncryptor` from the cube's MAC. The same encryptor class is used across all three generations – per the upstream gan-web-bluetooth reference, all GAN cubes since Gen2 share a static AES-128 CBC key + IV, and per-cube salt derivation from the MAC is identical across generations.
 5. `ble.connectToDevice(device)`.
 6. **Wait for service discovery + detect the protocol generation.** Collect `ble.discoveredServices` until a snapshot contains a UUID matching one of `GanGeneration.{GEN2, GEN3, GEN4}.serviceUuid`. The detected generation determines both the BLE characteristic UUIDs the transport binds to AND which parser the driver activates.
 7. Build `BleCubeTransport(serviceUuid, commandCharUuid, stateCharUuid)` from the detected generation's fields, then call `driver.connect(transport, encryptor, generation)`. The driver activates the matching parser, calls `parser.reset()`, enables notifications, which kicks off the CCCD descriptor write.
@@ -294,7 +304,7 @@ The reason all of this lives in a long-lived singleton (not a VM) is so navigati
 
 ### Smart-cube driver layer
 
-**Files:** `domain/driver/{CubeTransport, CubeEncryptor, SmartCubeCommand, SmartCubeEvent, SmartCubeDriver}.kt`, `domain/driver/gan/{GanCubeDriver, GanGeneration, GanParser, GanGen2Parser, GanGen3Parser, GanGen4Parser, BitView, GanGen2Encryptor}.kt`.
+**Files:** `domain/driver/{CubeTransport, CubeEncryptor, SmartCubeCommand, SmartCubeEvent, SmartCubeDriver}.kt`, `domain/driver/gan/{GanCubeDriver, GanGeneration, GanParser, GanGen2Parser, GanGen3Parser, GanGen4Parser, BitView, GanEncryptor}.kt`.
 
 The driver layer is **generation-agnostic at the SmartCubeDriver interface** and **generation-aware inside the GAN driver**. `SmartCubeDriver` is an interface; any future *cube vendor* (MoYu, QiYi…) would get its own implementation. Today only the GAN family is implemented, via `GanCubeDriver`, which itself supports three protocol generations (Gen2, Gen3, Gen4) covering the full GAN smart-cube lineup as of writing.
 
@@ -315,7 +325,7 @@ The driver layer is **generation-agnostic at the SmartCubeDriver interface** and
                                  └────────────────────┘
 ```
 
-**Generation auto-detection.** The `ConnectionOrchestrator` waits for BLE service discovery, then calls `GanGeneration.detect(advertisedServices)` – a case-insensitive lookup against the three known service UUIDs. The matched generation is passed to `GanCubeDriver.connect(transport, encryptor, generation)`, which selects the corresponding pre-allocated parser. The encryptor is the same `GanGen2Encryptor` for all three generations: per the upstream gan-web-bluetooth reference, all GAN cubes since Gen2 share a static AES-128 CBC key + IV, and per-cube salt derivation from the MAC is identical across generations.
+**Generation auto-detection.** The `ConnectionOrchestrator` waits for BLE service discovery, then calls `GanGeneration.detect(advertisedServices)` – a case-insensitive lookup against the three known service UUIDs. The matched generation is passed to `GanCubeDriver.connect(transport, encryptor, generation)`, which selects the corresponding pre-allocated parser. The encryptor is the same `GanEncryptor` for all three generations: per the upstream gan-web-bluetooth reference, all GAN cubes since Gen2 share a static AES-128 CBC key + IV, and per-cube salt derivation from the MAC is identical across generations.
 
 **Per-generation parsers.** All three implement the small `GanParser` interface (`reset()`, `buildCommand(cmd)`, `suspend parseStatePacket(bytes, historyRequester)`). They diverge in:
 
@@ -324,7 +334,7 @@ The driver layer is **generation-agnostic at the SmartCubeDriver interface** and
 - **Hardware reporting.** Gen4 spreads the hardware-info reply across four separate events (`0xFA`/`0xFC`/`0xFD`/`0xFE`); the parser accumulates fragments and emits a single unified `Hardware` event once all four arrive.
 - **Gyro support.** Gen2 always reports gyro; Gen3 never does (i Carry 2 hardware lacks the sensor); Gen4 reports it only on specific hardware names (currently `GAN12uiM`, the GAN12 ui Maglev).
 
-**Why per-connect encryptor:** GAN cubes derive their AES salt from the BLE MAC. Each cube gets its own `GanGen2Encryptor` (the class name is preserved for incremental migration; the class itself is generation-neutral), but the `GanCubeDriver` itself is a Koin singleton bound twice: as `GanCubeDriver` (so the orchestrator can call the generation-aware overload) and as `SmartCubeDriver` (so VMs and `AppLifecycle` see the generic interface). Subscribers to `driver.events` therefore stay stable across cube swaps **and across generation swaps** – they automatically see events from whichever cube is currently bound.
+**Why per-connect encryptor:** GAN cubes derive their AES salt from the BLE MAC. Each cube gets its own `GanEncryptor` instance built from that cube's MAC, but the `GanCubeDriver` itself is a Koin singleton bound twice: as `GanCubeDriver` (so the orchestrator can call the generation-aware overload) and as `SmartCubeDriver` (so VMs and `AppLifecycle` see the generic interface). Subscribers to `driver.events` therefore stay stable across cube swaps **and across generation swaps** – they automatically see events from whichever cube is currently bound.
 
 **Driver scope:** the driver owns its own `CoroutineScope(SupervisorJob() + parserDispatcher)` (default `Dispatchers.Default`), so decryption and parsing never run on the BLE binder thread. The events `SharedFlow` has `replay = 0`, `extraBufferCapacity = 64` – generous enough that a paused subscriber (user navigated away momentarily) doesn't drop moves.
 
@@ -618,11 +628,12 @@ ConnectionIndicator
 CubeView (square, fills available vertical space)
 ActionRow  [Reset Orientation] [Gyro?]   [Reset State]
 ScrambleCard  [scramble text + correction prefix]   [New]
-TimerArea  (timer / status / inspection / post-solve)
-StatGrid  (3-column compact tiles)
+─── flexible spacer ───
+TimerArea  (timer / status / inspection / post-solve, centered in the spacer)
+StatGrid  (3-column compact tiles, anchored to the bottom)
 ```
 
-The cube box is `weight(1f)` and fills whatever vertical space remains between the connection indicator at top and the fixed-size bottom block. `BoxWithConstraints` chooses `min(maxWidth, maxHeight)` so the cube is always square – fills column width on phones, fills available height on tablets.
+The cube box is `weight(1f)` and fills whatever vertical space remains between the connection indicator at top and the fixed-size bottom block. `BoxWithConstraints` chooses `min(maxWidth, maxHeight)` so the cube is always square – fills column width on phones, fills available height on tablets. A separate flexible spacer between the ScrambleCard and the TimerArea lets the timer breathe vertically on tall devices without pushing the stats off-screen on short ones.
 
 When disconnected, a translucent scrim `Box` is drawn on top of `CubeView`. (`Modifier.alpha` doesn't work – Korender renders into a separate hardware overlay layer that bypasses Compose's graphics layer.)
 
@@ -817,8 +828,8 @@ The wait-for-load-cycle is `vm.loading.drop(1).first { it }; vm.loading.first { 
 Sections:
 
 1. **Profile** – hint line + picker (active row on top, gear IconButton at row start opens per-profile settings dialog, swipe-to-delete + delete IconButton at row end), Create + Import side-by-side. Per-profile export lives inside the per-profile settings dialog.
-2. **Solving** – inspection enabled (sound-effects toggle is commented out – see *Setting keys*)
-3. **Display** – keep screen on, theme mode (segmented), theme color (8 swatches), language (System / Manual two-segment with dropdown inside the Manual segment)
+2. **Solving** – inspection enabled, keep screen on (sound-effects toggle is commented out – see *Setting keys*)
+3. **Display** – theme mode (segmented), theme color (8 swatches), language (System / Manual two-segment with dropdown inside the Manual segment)
 4. **Advanced** – cache enabled (with explanation)
 5. **About** – version, user id (selectable for support)
 
@@ -900,13 +911,13 @@ There is no ViewModel: the Guide screen is purely composable state (`markdownTex
 
 **Files:** `ui/screens/solve/stats/{SolveStat, StatRegistry}.kt`, `ui/screens/solve/stats/builtin/BuiltinStats.kt`.
 
-`SolveStat` is intentionally string-shaped: `compute(history, current): String?`. A stat is a value the user reads, not data we plot. Returning null hides the row (used for Ao5 with too few solves and for `StepTimesStat` always until step detection is implemented).
+`SolveStat` is intentionally string-shaped: `compute(history, current): String?`. A stat is a value the user reads, not data we plot. Returning null hides the row (used for Ao5/Ao12 with too few solves and for `TotalSolvesStat` when the count is 0).
 
-`StatRegistry` holds the default order (`Best, Mean, Ao5, Ao12, Fluency, Total, Steps`). Currently displayed as a 3-column grid → 6 visible tiles (Steps is filtered out as it always returns null).
+`StatRegistry` holds the default order of six stats: `Fluency, Ao5, Ao12, Fastest, Mean, TotalSolves`. They render as a 3-column grid → 2 rows of 3 visible tiles (Best/Mean/Ao5/Ao12 cluster the time-based numbers; TPS and Total close out the second row). The registry is mutable so settings can later let users reorder/hide entries; no UI for that exists yet.
 
-`SolveSession` is the live snapshot passed to stats while a solve is running: `running, durationMs, moveCount, totalSolves, bestDurationMs`. `totalSolves` comes from the cache's `solveCount` because the recent-100 history isn't enough – a profile can have thousands of older solves outside the in-memory window. `bestDurationMs` comes from `cache.bestDurationMs` (an indexed `MIN(duration_ms + penalty_ms)` query, DNFs excluded) and is used by `BestStat`.
+`SolveSession` is the live snapshot passed to stats while a solve is running: `running, durationMs, moveCount, totalSolves, bestDurationMs`. `totalSolves` comes from the cache's `solveCount` because the recent-100 history isn't enough – a profile can have thousands of older solves outside the in-memory window. `bestDurationMs` comes from `cache.bestDurationMs` (an indexed `MIN(duration_ms + penalty_ms)` query, DNFs excluded) and is used by `FastestStat`.
 
-`BestStat` reads `bestDurationMs` directly – it does **not** mix the running solve's in-flight `durationMs` into the comparison. The previous implementation min'd the running timer with the historical best, which made the "fastest solve" tile track the live timer the moment a running solve dropped below the previous record (effectively duplicating the main timer until SOLVED committed the new row). The displayed value now always reflects the persisted DB record, which is what the user expects to compare their current solve against. If `bestDurationMs` is null (caching disabled), the stat falls back to `history.minOf { it.effectiveMs }` – not perfect (a best older than the recent-100 window slips out) but honest. A new PB triggers `cache.recentSolves` to re-emit (which fans out into `bestDurationMs`), the stat grid recomposes via the `history` parameter changing, and the tile updates without any explicit refresh.
+`FastestStat` reads `bestDurationMs` directly – it does **not** mix the running solve's in-flight `durationMs` into the comparison. The previous implementation min'd the running timer with the historical best, which made the "fastest solve" tile track the live timer the moment a running solve dropped below the previous record (effectively duplicating the main timer until SOLVED committed the new row). The displayed value now always reflects the persisted DB record, which is what the user expects to compare their current solve against. If `bestDurationMs` is null (caching disabled), the stat falls back to `history.minOf { it.effectiveMs }` – not perfect (a best older than the recent-100 window slips out) but honest. A new PB triggers `cache.recentSolves` to re-emit (which fans out into `bestDurationMs`), the stat grid recomposes via the `history` parameter changing, and the tile updates without any explicit refresh.
 
 WCA-ish trimmed average: drop top/bottom 5% (≥1 each). Returns null below 5 samples.
 
@@ -938,17 +949,18 @@ Korender renders into a native Android `SurfaceView` that lives in the window la
 
 `CubeView` proactively hides the Korender block on `Lifecycle.ON_PAUSE`/`ON_STOP` via a `renderActive` flag, falling back to a theme-colored placeholder Box. The `onDispose` also flips the flag for the case of in-Activity navigation (no lifecycle event, just NavHost dispose).
 
-### Initial-frame cover (the black-flash fix)
+### Initial-frame cover (the doc-comment vs. code gap)
 
-A fresh SurfaceView is opaque-black until its OpenGL surface is ready and the first frame is rendered – typically 600–900 ms on a cold start. The `Modifier.background(theme)` on the Box around the Korender block doesn't help because the SurfaceView sits in a SEPARATE window layer above the Compose drawing tree, so it covers up whatever Compose drew underneath it.
+A fresh SurfaceView is opaque-black until its OpenGL surface is ready and the first frame is rendered. The `Modifier.background(theme)` on the Box around the Korender block doesn't help because the SurfaceView sits in a SEPARATE window layer above the Compose drawing tree, so it covers up whatever Compose drew underneath it.
 
-Workaround: stack a same-colored cover `Box` ON TOP of the Korender block for a short window, then fade it out. The cover is exactly the theme background color, so for the period it's visible the user sees a solid square in their theme – visually indistinguishable from "the cube is there but isn't drawn yet". When the cover fades, the cube comes up smoothly rather than blinking from black.
+The kdoc at the top of `CubeView.kt` describes a "fade-out cover Box" workaround for this, but the current implementation does **not** ship that fade. What `CubeView.kt` does today is:
 
-Implementation in `CubeView.kt`: a `coverAlpha` state driven by `animateFloatAsState`, reset to 1f and then to 0f via a `LaunchedEffect(renderActive)` with a `delay(SURFACE_COVER_HOLD_MS = 600 ms)` and a fade duration of `SURFACE_COVER_FADE_MS = 250 ms`. Resets to opaque immediately on `renderActive = false` so the next resume doesn't briefly leak a stale frame through a half-faded cover.
+- While the host screen is `STARTED`/`RESUMED`, `renderActive` is true and the Korender block is composed; while paused/stopped (or once the composable is disposed), `renderActive` flips to false and a same-coloured placeholder `Box` replaces the Korender block. This is what handles the "lingering surface" case where Compose tears down but the SurfaceView takes a frame to detach.
+- There is no `coverAlpha` / `animateFloatAsState` / `LaunchedEffect(renderActive)` fade cycle in the file. On a true cold-start the user may briefly see the SurfaceView's black initial frame before Korender's first paint. Fixing it properly along the lines of the kdoc is open work.
 
 ### Theme change forces Korender re-init
 
-Korender's `this.background = ...` is set once during scene setup; assigning to it inside `Frame { }` doesn't propagate to the GL clear color reliably across versions. So `CubeView` wraps the whole `Korender { }` block in `key(background) { }` – a theme change tears down and rebuilds the surface with the new color. Theme changes are infrequent, so this is not a per-frame cost.
+Korender's `this.background = ...` is set once during scene setup; assigning to it inside `Frame { }` doesn't propagate to the GL clear color reliably across versions. So `CubeView` wraps the whole `Korender { }` block in `key(backgroundColor) { ... }` – a theme change tears down and rebuilds the surface with the new color. Theme changes are infrequent, so this is not a per-frame cost.
 
 ### File export rationale (`AndroidFileExporter`)
 
@@ -1101,15 +1113,15 @@ created_at                                           name                      s
 Centralised in `SettingsRepository.Keys` so a typo at one call site can't drift away from another:
 
 ```
-solving.inspection.enabled  "1"/"0"   default true
-display.keepScreenOn        "1"/"0"   default true
-theme.seed                  ThemeSeed.key – "blue", "green", "purple", "orange", "mono"
-theme.mode                  ThemeMode.key – "system", "light", "dark"
-ui.language                 AppLanguage.key – "system", "en", "cs"
-app.cache.enabled           "1"/"0"   default true
+solving.inspectionEnabled   "1"/"0"   default true
+solving.keepScreenOn        "1"/"0"   default true
+display.theme.seed          ThemeSeed.key – "blue", "green", "purple", "orange", "red", "pink", "yellow", "mono"
+display.theme.mode          ThemeMode.key – "system", "light", "dark"
+display.ui.language         AppLanguage.key – "system", "en", "cs"
+app.cacheEnabled            "1"/"0"   default true
 ```
 
-`solving.sound.enabled` is **commented out** in `SettingsRepository.Keys` and `SettingsViewModel.ALLOWED_SETTING_KEYS`, and the corresponding switch row in `SettingsScreen.kt` is also commented out. The associated string resource (`settings_sound`) is preserved in both `values/strings.xml` and `values-cs/strings.xml`. Re-enabling the setting is a multi-line revert (uncomment all four sites). The setting was hidden because the cube-event sound design hasn't landed yet; persisting a switch the user can flip but that does nothing was confusing.
+`solving.soundEnabled` is **commented out** in `SettingsRepository.Keys` and `SettingsViewModel.ALLOWED_SETTING_KEYS`, and the corresponding switch row in `SettingsScreen.kt` is also commented out. The associated string resource (`settings_sound`) is preserved in both `values/strings.xml` and `values-cs/strings.xml`. Re-enabling the setting is a multi-line revert (uncomment all four sites). The setting was hidden because the cube-event sound design hasn't landed yet; persisting a switch the user can flip but that does nothing was confusing.
 
 ---
 
@@ -1121,7 +1133,7 @@ Two regimes coexist via manifest `maxSdkVersion`:
 
 | Android version | Permissions (runtime) |
 |---|---|
-| 12+ (API 31+) | `BLUETOOTH_SCAN` + `BLUETOOTH_CONNECT`, both with `usesPermissionFlags="neverForLocation"` |
+| 12+ (API 31+) | `BLUETOOTH_SCAN` (declared with `usesPermissionFlags="neverForLocation"`) + `BLUETOOTH_CONNECT` |
 | 10/11 (API 29–30) | `ACCESS_FINE_LOCATION` (the legacy `BLUETOOTH` + `BLUETOOTH_ADMIN` are install-time normal-protection so they don't enter the runtime ask) |
 
 The legacy `ACCESS_FINE_LOCATION` is needed because on Android 10/11 the OS treats BLE scan results as location data – without the permission, scans return no results even if BT works fine.
@@ -1165,7 +1177,7 @@ CZECH    key="cs"       tag="cs"
 
 ## Theming
 
-8 hand-rolled seeds (BLUE, GREEN, PURPLE, ORANGE, RED, PINK, YELLOW, MONO) × light/dark/system → 16 (or 17 with system) static color schemes. Each seed defines `primary`, `onPrimary`, `primaryContainer`, `onPrimaryContainer` for both modes. `AppColorSchemes` mirrors `primary` into `secondary` and `tertiary` (see *AppTheme* above for the rationale).
+8 hand-rolled seeds (Blue, Green, Purple, Orange, Red, Pink, Yellow, Mono) × light/dark theme → 16 static color schemes. Each seed defines `primary`, `onPrimary`, `primaryContainer`, `onPrimaryContainer` for both modes. `AppColorSchemes` mirrors `primary` into `secondary` and `tertiary` (see *AppTheme* above for the rationale).
 
 Static schemes keep `commonMain` pure-Kotlin; dynamic generation would need `material-color-utilities`, which has no Compose Multiplatform variant currently bundled.
 
@@ -1224,7 +1236,7 @@ JVM and Web platform actuals are stubs that throw `NotImplementedError` in every
 If you ever need to ship desktop:
 
 1. Implement `jvmMain` actuals: `currentTimeMillis`, `generateUuid`, `DriverFactory` (use `JdbcSqliteDriver`), `BleManager` (e.g. via BlueZ on Linux / BluetoothLEAdvertisementWatcher on Windows).
-2. Implement `GanGen2Encryptor` using `javax.crypto` (essentially identical to the Android version – it already uses `javax.crypto`). The class is generation-neutral – the same key/IV works for Gen2/Gen3/Gen4, the file name is historical.
+2. Implement `GanEncryptor` using `javax.crypto` (essentially identical to the Android version – it already uses `javax.crypto`). The class is generation-neutral – the same key/IV works for Gen2/Gen3/Gen4.
 3. Wire the platform module: `single<UrlOpener> { … }`, etc.
 4. Replace the placeholder `App()` body in `desktopApp/Main.kt`.
 
@@ -1282,12 +1294,12 @@ The `@Composable expect fun ApplySystemBarsTheme` pattern works because Compose 
 
 ## Known issues & future work
 
-- **Sound effects setting is hidden.** The `solving.sound.enabled` switch is commented out in `SettingsRepository.Keys`, `SettingsViewModel.ALLOWED_SETTING_KEYS`, the corresponding switch row in `SettingsScreen.kt`, and the `settings_sound` import. The string resource itself is preserved in both `values/strings.xml` and `values-cs/strings.xml`. Re-enabling the setting is a multi-line uncomment once the actual sound design lands. App is not yet distributed, so no migration is needed – fresh installs simply won't have any rows for this key in the `settings` table.
+- **Sound effects setting is hidden.** The `solving.soundEnabled` switch is commented out in `SettingsRepository.Keys`, `SettingsViewModel.ALLOWED_SETTING_KEYS`, the corresponding switch row in `SettingsScreen.kt`, and the `settings_sound` import. The string resource itself is preserved in both `values/strings.xml` and `values-cs/strings.xml`. Re-enabling the setting is a multi-line uncomment once the actual sound design lands. App is not yet distributed, so no migration is needed – fresh installs simply won't have any rows for this key in the `settings` table.
 - **`enqueueReset` reset-vs-reset race.** If a Facelets event triggers `enqueueReset(target_A)` while `waitForPartner` is mid-poll holding a different Reset (the consumer has already `tryReceive`d an older Reset and is about to put it back), the older Reset can land in the channel ahead of the newer one. Net result: the older target wins. Requires an extreme race window and is rare; not fixed because `enqueueReset` itself is rare (only on Facelets resync) and the diff window is microseconds.
-- **Czech plural rules in History total count.** `HistoryScreen.totalCountLabel` uses a single template ("Celkem X složení") that works grammatically for all counts in Czech, but the English version still uses simple singular/plural ("1 solve total" / "N solves total"). If a third language with more involved plural rules is added, switch to a proper plural string-resource mechanism.
-- **Step-time stat** (`StepTimesStat`) always returns null – placeholder until cross/F2L/OLL/PLL detection lands. The architecture for detection isn't wired yet; it would live in the driver/parser layer (track move sequences against known algorithm signatures).
-- **`MainActivity` uses `android.util.Log` indirectly via `BleManager`** while everything else uses Kermit. This is platform-specific code so it's defensible, but a unified Kermit-on-Android setup would be cleaner.
+- **History total-count plural form is one/other only.** `HistoryScreen.totalCountLabel` resolves to `Res.string.history_total_one` for count == 1 and `Res.string.history_total_other` otherwise. English uses singular/plural ("1 solve total" / "N solves total"); Czech uses the same template for both forms ("Celkem N složení") because that wording works for any count. If a third language with more involved plural rules (e.g. Russian's three forms, or Slavic few/many splits) is added, switch to a proper plural string-resource mechanism instead of the two-key one/other split.
+- **Per-step time analysis (cross/F2L/OLL/PLL)** is not yet implemented. The architecture for detection isn't wired yet; it would live in the driver/parser layer (track move sequences against known algorithm signatures). When it lands, a new stat could be added to `StatRegistry` to surface per-step times.
+- **`BleManager.android.kt` uses `android.util.Log` directly** while the rest of the app uses Kermit. This is platform-specific code tightly coupled to Android Bluetooth APIs, so it's defensible, but a unified Kermit-on-Android setup would be cleaner.
 - **No iOS support** – see *Module layout / Why no iosMain*. Blocked on korender adding an iOS variant or a renderer abstraction.
 - **JVM-desktop and Web targets are stubs**. The desktop entry point shows a placeholder window; web modules are excluded from `settings.gradle.kts`. Implementing them is feasible (see *Multiplatform stubs* for the steps).
 - **Crypto constants are hardcoded.** GAN Gen2 keys/IVs are static and well-known in the smart-cube community, so this is fine, but future GAN generations (Gen3, Gen4) will need new driver/encryptor implementations behind `SmartCubeDriver`.
-- **The "is GAN" detection on the Devices screen** uses a hardcoded MAC OUI prefix. Future GAN models with new prefixes will need a list (`GAN_OUI_PREFIXES`) rather than a single string.
+- **The "is GAN" detection on the Devices screen** uses a hardcoded MAC OUI prefix list (`GAN_CUBE_OUI_PREFIXES` in `DevicesScreen.kt`), currently containing a single entry (`"AB:12:34"`). New GAN models with different prefixes can be supported by adding them to that list.

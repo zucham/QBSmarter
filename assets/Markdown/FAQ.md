@@ -118,7 +118,7 @@ won't be seen.
 In rough order of importance:
 
 1. Android version and phone model.
-2. The smart cube model (GAN356 i Carry, GAN356 i 3, GAN 12 ui FreePlay, etc.) and
+2. The smart cube model (GAN356 i Carry, GAN356 i 3, GAN12 ui Maglev, GAN14 ui FreePlay, etc.) and
    approximate firmware version (visible in the cube's Info dialog inside the
    app).
 3. What you did, what you expected, what happened.
@@ -195,10 +195,13 @@ your device.
 In Settings, open the per-profile settings dialog (gear icon next to your
 profile name) and use **Export profile**. You'll get a JSON file containing
 all of that profile's solves and settings. Save it wherever you back up your
-phone. To restore, use **Import** on the Settings screen.
+phone.
 
-The whole-database export is also available via the Import / Export buttons
-in the main Settings section &ndash; that one bundles every profile.
+To restore a backup, use the **Import** button in the main Settings section
+(next to *Create profile*). Imported profiles merge into the local database
+with full-field deduplication for solves, so re-importing the same backup is
+a no-op. Each export is a per-profile file; if you maintain multiple profiles,
+export each one separately.
 
 ---
 
