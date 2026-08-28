@@ -110,7 +110,9 @@ Hlavním účelem aplikace je automatické měření času během skládání, g
 2. Po dokončení rozmíchání se časovač přepne do režimu **prohlížení** (pokud v Nastavení nevypnete možnost `15s čas na prohlédnutí`). Aplikace čeká na první otočení stranou kostky nebo na vypršení časovače.
 3. Časovač po prvním otočení strany kostky či vypršení časovače přechází do režimu **měření času**. Měří čas až do úspěšného složení kostky, nebo do přerušení Reset tlačítkem či odpojení zařízení.
 4. Po dokončení složení časovač zůstává ve fázi **čekání**. Dokončenému složení je nyní možno přiřadit buď `+2` nebo `DNF`.
-5. Pro začátek dalšího složení stačí buď rychle provést pohyb tam a zpět horní stranou (neboli `U U'`) či klepnout na tlačítko Nový v sekci se scramblem.
+5. Pro začátek dalšího složení stačí otočit libovolnou stranou kostky či klepnout na tlačítko Nový v sekci se scramblem.
+    - Provedené otočení se přenese do nového zamíchání: pokud jde náhodou o jeho první tah, jste už o tah napřed, jinak se zobrazí červeně jako tah k vrácení, stejně jako každá jiná chyba při míchání.
+    - Pokud chcete, aby kostka mezi skládáními zůstávala složená, vypněte v Nastavení volbu `Nové skládání začne libovolným otočením`. Nové skládání pak začne rychlým pohybem tam a zpět horní stranou (neboli `U U'`).
 
 > Pokud se vám podaří překonat svůj osobní rekord pro aktuální profil, aplikace vám gratuluje vyskakovacím dialogem **Nový rekord!**. Pokud byste si potom rozhodli přiřadit penalizaci `+2` nebo `DNF`, aplikace gratulaci automaticky odebere, pokud složení už nebude rekordem.
 
@@ -196,6 +198,7 @@ Pod seznamem profilů najdete dvě tlačítka:
 
 - **`15s čas na prohlédnutí`** - po dokončení zamíchání aplikace ponechá 15 sekund (dle pravidel WCA) na prohlédnutí kostky před spuštěním časovače. Pokud volbu vypnete, časovač se spustí automaticky při prvním tahu po dokončení zamíchání.
 - **`Nevypínat obrazovku při skládání`** - během skládání aplikace zabrání telefonu uspat obrazovku. Po dokončení složení (nebo přechodu na jinou obrazovku) se tento režim opět vypne.
+- **`Nové skládání začne libovolným otočením`** - ve výchozím stavu zapnuto. Po dokončení složení zobrazí první další otočení nové zamíchání a spustí další skládání. Po vypnutí je místo toho potřeba rychlé `U U'`, jehož výhodou je, že kostka zůstane složená.
 
 ### Zobrazení
 

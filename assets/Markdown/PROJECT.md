@@ -818,9 +818,15 @@ The `wasConnected` guard matters: the initial app state is `DISCONNECTED`, so wi
 
 A `LaunchedEffect(Unit)` in `SolveScreen` calls `vm.resyncVisualToLogical()` whenever the screen enters composition. This catches up the visual state to `logicalState` whenever the user navigates back to Solve from Devices/History/Settings. While the user was away, the cube's move queue was stopped (`CubeView.DisposableEffect.onDispose` calls `cube.stop()`), so any moves received over BLE during that window piled up in the channel without animating. `logicalState` is maintained synchronously by the VM regardless of which screen is shown; this effect ensures the visual catches up cleanly without replaying a stale backlog as visible animations. See *`resync` vs `catchUpVisualTo`* in the Cube domain section.
 
-##### "Next solve" gesture
+##### Starting the next solve
 
-Post-SOLVED, performing a quick `U U'` (or any face + its inverse, within 1500 ms) starts a new scramble. Detection is in `handleNextSolveGesture`.
+Two modes, chosen by the per-profile `solving.anyMoveStartsNewSolve` setting (**default on**).
+
+**Any turn (default).** Any move made in the SOLVED phase brings up a new scramble and starts the next solve. Resolved at the *top* of `handleMove`, before the move is applied — not inside the SOLVED branch — because `newScramble()` resets the cube to solved and a move applied first would simply be erased. The app would then believe the cube is solved while the one in the user's hands is a quarter turn off, which desyncs scramble progress and, worse, means `logicalState.isSolved()` never fires and the *next* solve's timer never stops. Generating the scramble first puts the phase in SCRAMBLING, so the turn falls straight through into normal scramble handling and lands on the fresh scramble as its first move: progress 1 if it happens to match the opening move, otherwise a correction move to undo. Either way the model and the physical cube agree, which is the property everything downstream rests on.
+
+**`U U'` gesture.** With the setting off, a face turn and its immediate reversal within `NEXT_SOLVE_GESTURE_WINDOW_MS` (1500 ms) starts the new scramble instead (`handleNextSolveGesture`). The gesture exists precisely because it is net-zero — it leaves the cube solved, which is the state a fresh scramble is written for — so it remains available for users who would rather their cube never drift off solved.
+
+The post-solve tip (`NextSolveTip`) renders whichever of the two is active; the branch lives inside the one composable rather than at the call site so "what does the app do after a solve" has a single answer next to the setting that decides it.
 
 ##### Personal-best celebration
 
@@ -1298,6 +1304,7 @@ Centralised in `SettingsRepository.Keys` so a typo at one call site can't drift 
 ```
 solving.inspectionEnabled   "1"/"0"   default true
 solving.keepScreenOn        "1"/"0"   default true
+solving.anyMoveStartsNewSolve "1"/"0" default true
 display.theme.seed          ThemeSeed.key – "blue", "green", "purple", "orange", "red", "pink", "yellow", "mono"
 display.theme.mode          ThemeMode.key – "system", "light", "dark"
 display.ui.language         AppLanguage.key – "system", "en", "cs"

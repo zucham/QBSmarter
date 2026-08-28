@@ -224,6 +224,26 @@ class SolveViewModel(
     private val _gyroEnabled = MutableStateFlow(cube.gyroscope.enabled)
     val gyroEnabled: StateFlow<Boolean> = _gyroEnabled.asStateFlow()
 
+    /**
+     * Whether any turn made on the finished-solve screen starts the next
+     * solve, as opposed to the U U' gesture. See
+     * [SettingsRepository.Keys.ANY_MOVE_STARTS_NEW_SOLVE].
+     *
+     * A StateFlow rather than a cache lookup because both consumers need
+     * it in a different shape: [handleMove] reads `.value` synchronously
+     * on the move hot path, and the Solve screen collects it to show the
+     * matching post-solve tip.
+     */
+    val anyMoveStartsNewSolve: StateFlow<Boolean> =
+        activeProfile.id.flatMapLatest { uid ->
+            if (uid == null) flowOf(true)
+            else settingsRepo.observeBool(
+                uid,
+                SettingsRepository.Keys.ANY_MOVE_STARTS_NEW_SOLVE,
+                default = true,
+            )
+        }.stateIn(viewModelScope, SharingStarted.Eagerly, true)
+
     init {
         newScramble()  // give the user something to look at on first paint
 
@@ -524,6 +544,24 @@ class SolveViewModel(
     }
 
     private fun handleMove(move: SmartCubeEvent.Move) {
+        // "Any move starts the next solve" is resolved *before* the move
+        // is applied, not inside the SOLVED branch below. newScramble()
+        // resets the cube back to solved, so a move applied first would
+        // simply be erased – and the app would then believe the cube is
+        // solved while the one in the user's hands is a quarter turn
+        // off, which desyncs scramble progress and, worse, stops the
+        // timer from ever seeing the next solve finish.
+        //
+        // Generating the scramble first puts the phase in SCRAMBLING, so
+        // the turn falls through into the normal scramble handling and
+        // lands on the new scramble as its first move: progress 1 if it
+        // happens to match, otherwise a correction move to undo. Either
+        // way our model and the physical cube agree.
+        if (_phase.value == SolvePhase.SOLVED && anyMoveStartsNewSolve.value) {
+            lastSolvedGestureMove = null
+            newScramble()
+        }
+
         cube.enqueueMove(move.face, move.cw)
         logicalState = applyMove(logicalState, move.face, move.cw)
         val cubeMove = CubeMove(move.face, if (move.cw) 1 else 3)
@@ -632,6 +670,12 @@ class SolveViewModel(
 
     private var lastSolvedGestureMove: SmartCubeEvent.Move? = null
 
+    /**
+     * The U U' gesture: a face turn and its reversal in quick
+     * succession start the next solve. Only reached when
+     * [anyMoveStartsNewSolve] is off – with it on, [handleMove] has
+     * already left the SOLVED phase before this branch is considered.
+     */
     private fun handleNextSolveGesture(move: SmartCubeEvent.Move) {
         val previous = lastSolvedGestureMove
         if (previous != null &&

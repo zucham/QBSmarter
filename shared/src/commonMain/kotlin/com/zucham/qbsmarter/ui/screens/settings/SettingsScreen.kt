@@ -102,6 +102,8 @@ import qbsmarter.shared.generated.resources.profile_ok
 import qbsmarter.shared.generated.resources.profile_settings_open
 import qbsmarter.shared.generated.resources.profile_settings_title
 import qbsmarter.shared.generated.resources.profile_total_solves
+import qbsmarter.shared.generated.resources.settings_any_move_new_solve
+import qbsmarter.shared.generated.resources.settings_any_move_new_solve_explanation
 import qbsmarter.shared.generated.resources.settings_cache_enabled
 import qbsmarter.shared.generated.resources.settings_cache_explanation
 import qbsmarter.shared.generated.resources.settings_display_name
@@ -189,6 +191,15 @@ fun SettingsScreen() {
             SwitchRow(
                 stringResource(Res.string.settings_keep_screen_on),
                 SettingsRepository.Keys.KEEP_SCREEN_ON, true, vm,
+            )
+            SwitchRow(
+                stringResource(Res.string.settings_any_move_new_solve),
+                SettingsRepository.Keys.ANY_MOVE_STARTS_NEW_SOLVE, true, vm,
+            )
+            Text(
+                stringResource(Res.string.settings_any_move_new_solve_explanation),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             // Sound-effects toggle disabled until cube-event sound design
             // lands. Preserved (not deleted) so re-enabling it is a

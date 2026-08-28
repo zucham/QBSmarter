@@ -110,7 +110,9 @@ The main purpose of the app is automatic time measurement during solving, scramb
 2. After the scrambling is complete, the timer switches to **inspection** mode (unless you have disabled `15s inspection time` in Settings). The app waits for the first cube turn or for the timer to run out.
 3. After the first cube turn or after the inspection timer runs out, the timer enters **measurement** mode. It measures time until the cube is successfully solved, or until interrupted by the Reset button or device disconnection.
 4. After the solve is finished, the timer stays in the **waiting** phase. The completed solve can now be assigned either `+2` or `DNF`.
-5. To start a new solve, just quickly perform a back-and-forth motion with the top face (i.e. `U U'`) or tap the New button in the scramble section.
+5. To start a new solve, just turn any face of the cube, or tap the New button in the scramble section.
+    - The turn you make is carried over into the new scramble: if it happens to be the scramble's first move you are already one move in, otherwise it shows up in red as a move to undo, exactly like any other scrambling mistake.
+    - If you would rather your cube stayed solved between solves, turn off `Any turn starts a new solve` in Settings. A quick back-and-forth motion with the top face (i.e. `U U'`) then starts the new solve instead.
 
 > If you manage to beat your personal best for the active profile, the app congratulates you with a popup dialog **New personal best!**. If you then decide to apply a `+2` or `DNF` penalty, the app will automatically retract the congratulation if the solve is no longer a record.
 
@@ -196,6 +198,7 @@ Below the profile list you'll find two buttons:
 
 - **`15s inspection time`** - after the scramble is finished, the app gives you 15 seconds (per WCA rules) to inspect the cube before the timer starts. If you turn this off, the timer starts automatically on the first turn after the scramble finishes.
 - **`Keep screen on while solving`** - while solving, the app prevents the phone from putting the screen to sleep. After a solve finishes (or when navigating to a different screen) this mode is turned off again.
+- **`Any turn starts a new solve`** - on by default. Once a solve is finished, the next turn you make brings up a new scramble and starts the next solve. Turn it off to require a quick `U U'` instead, which has the advantage of leaving the cube solved.
 
 ### Display
 

@@ -121,6 +121,29 @@ class SettingsRepository(
          */
         const val GYRO_ENABLED = "solving.gyroEnabled"
 
+        /**
+         * "1" / "0". Default **true**. When on, any turn made while the
+         * finished-solve result is on screen generates a new scramble
+         * and starts the next solve.
+         *
+         * When off, the older gesture applies instead: a face turn and
+         * its immediate reversal (U U') within
+         * `NEXT_SOLVE_GESTURE_WINDOW_MS`. That gesture exists because it
+         * is net-zero – it leaves the cube solved, which is the state a
+         * fresh scramble is written for. A single turn is not net-zero,
+         * so with this setting on the triggering turn is carried into
+         * the new scramble as the first move: it either happens to match
+         * the scramble's opening move, or it shows up as a correction
+         * move to undo. Either way the app's idea of the cube and the
+         * cube in the user's hands stay in agreement, which is the
+         * property the whole scramble-progress machinery rests on.
+         *
+         * Default on because it is the convenient behaviour and the one
+         * comparable timers ship; the U U' gesture stays available for
+         * users who would rather their cube never drift off solved.
+         */
+        const val ANY_MOVE_STARTS_NEW_SOLVE = "solving.anyMoveStartsNewSolve"
+
         // Display
         /** "1" / "0". Default true. */
         const val KEEP_SCREEN_ON = "solving.keepScreenOn"

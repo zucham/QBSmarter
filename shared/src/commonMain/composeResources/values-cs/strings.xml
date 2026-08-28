@@ -24,6 +24,7 @@
     <string name="solve_connect_cube">Připojit kostku</string>
     <string name="solve_quick_overview">Stručný přehled</string>
     <string name="solve_solved">Složeno!</string>
+    <string name="solve_tip_any_move">Tip: Nové skládání začne libovolným otočením!</string>
     <string name="solve_tip_uu_prefix">Tip: Rychlým</string>
     <string name="solve_tip_uu_suffix">začnete nové složení!</string>
     <string name="solve_dnf">DNF</string>
@@ -108,6 +109,8 @@
     <string name="settings_inspection">15s čas na prohlédnutí</string>
     <string name="settings_sound">Zvukové efekty</string>
     <string name="settings_keep_screen_on">Nevypínat obrazovku při skládání</string>
+    <string name="settings_any_move_new_solve">Nové skládání začne libovolným otočením</string>
+    <string name="settings_any_move_new_solve_explanation">Po dokončení skládání zobrazí první další otočení nové zamíchání a spustí další skládání. Po vypnutí je místo toho potřeba rychlé U U\', které kostku nechá složenou.</string>
     <string name="settings_export">Exportovat profil</string>
     <string name="settings_import">Importovat profil</string>
     <string name="settings_status_no_active_profile">Žádný aktivní profil k exportu.</string>

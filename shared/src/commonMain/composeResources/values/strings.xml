@@ -34,6 +34,7 @@
     <string name="solve_solved">Solved!</string>
     <string name="solve_tip_uu_prefix">Tip: Perform a quick</string>
     <string name="solve_tip_uu_suffix">to start a new solve!</string>
+    <string name="solve_tip_any_move">Tip: Any turn starts a new solve!</string>
     <string name="solve_dnf">DNF</string>
     <string name="solve_plus2">+2</string>
     <string name="solve_pb_title">New personal best!</string>
@@ -116,6 +117,8 @@
     <string name="settings_inspection">15s inspection time</string>
     <string name="settings_sound">Sound effects</string>
     <string name="settings_keep_screen_on">Keep screen on while solving</string>
+    <string name="settings_any_move_new_solve">Any turn starts a new solve</string>
+    <string name="settings_any_move_new_solve_explanation">After a solve, the next turn you make brings up a new scramble and starts the next solve. Turn this off to require a quick U U\' instead, which leaves the cube solved.</string>
     <string name="settings_export">Export profile</string>
     <string name="settings_import">Import profile</string>
     <string name="settings_status_no_active_profile">No active profile to export.</string>

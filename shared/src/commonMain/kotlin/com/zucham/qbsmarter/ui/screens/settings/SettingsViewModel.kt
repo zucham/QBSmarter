@@ -470,6 +470,7 @@ class SettingsViewModel(
             // SettingsRepository.Keys.SOUND_ENABLED,  // disabled – see SettingsRepository.Keys
             SettingsRepository.Keys.KEEP_SCREEN_ON,
             SettingsRepository.Keys.GYRO_ENABLED,
+            SettingsRepository.Keys.ANY_MOVE_STARTS_NEW_SOLVE,
             SettingsRepository.Keys.THEME_SEED,
             SettingsRepository.Keys.THEME_MODE,
             SettingsRepository.Keys.LANGUAGE,

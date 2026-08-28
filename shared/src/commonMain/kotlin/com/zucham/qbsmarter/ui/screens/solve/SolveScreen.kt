@@ -88,6 +88,7 @@ import qbsmarter.shared.generated.resources.solve_reset_state
 import qbsmarter.shared.generated.resources.solve_running
 import qbsmarter.shared.generated.resources.solve_scramble_prompt
 import qbsmarter.shared.generated.resources.solve_solved
+import qbsmarter.shared.generated.resources.solve_tip_any_move
 import qbsmarter.shared.generated.resources.solve_tip_uu_prefix
 import qbsmarter.shared.generated.resources.solve_tip_uu_suffix
 import qbsmarter.shared.generated.resources.solve_toggle_gyro
@@ -181,6 +182,7 @@ fun SolveScreen(onNavigateToDevices: () -> Unit = {}) {
     val lastSolveInfo by vm.lastSolveInfo.collectAsState()
     val mode by vm.themeController.mode.collectAsState()
     val gyroEnabled by vm.gyroEnabled.collectAsState()
+    val anyMoveStartsNewSolve by vm.anyMoveStartsNewSolve.collectAsState()
 
     // Derive "is the cube already aligned" from the orbiter's
     // rotation. The orbiter exposes a Compose MutableState<Transform>, so
@@ -278,6 +280,7 @@ fun SolveScreen(onNavigateToDevices: () -> Unit = {}) {
             inspectionMs = inspectionMs,
             inspectionRunning = inspectionRunning,
             lastSolveInfo = lastSolveInfo,
+            anyMoveStartsNewSolve = anyMoveStartsNewSolve,
             onMarkDnf = vm::markLastSolveDnf,
             onMarkPlus2 = vm::markLastSolvePlus2,
         )
@@ -783,6 +786,7 @@ private fun TimerArea(
     inspectionMs: Long,
     inspectionRunning: Boolean,
     lastSolveInfo: LastSolveInfo?,
+    anyMoveStartsNewSolve: Boolean,
     onMarkDnf: () -> Unit,
     onMarkPlus2: () -> Unit,
 ) {
@@ -841,7 +845,7 @@ private fun TimerArea(
                     onMarkPlus2 = onMarkPlus2,
                 )
             }
-            NextSolveTip()
+            NextSolveTip(anyMoveStartsNewSolve)
         }
     }
 }
@@ -921,12 +925,28 @@ private fun PenaltyButton(label: String, highlighted: Boolean, onClick: () -> Un
 }
 
 /**
- * QoL hint shown after a solve: "Tip: Perform a quick U U' to start a new
- * solve!". The 'U U'' substring is highlighted in primary so the user
- * notices it's an actual cube-move suggestion.
+ * QoL hint shown after a solve, telling the user how to start the next
+ * one. Which hint depends on the setting that decides it: with
+ * "any turn starts a new solve" on there is no gesture to teach, so the
+ * tip is a plain sentence; with it off the U U' gesture is spelled out,
+ * its move substring highlighted in primary so the user reads it as an
+ * actual cube-move suggestion rather than prose.
+ *
+ * Keeping the two in one composable (rather than branching at the call
+ * site) keeps the "what does the app do after a solve" answer in a
+ * single place, next to the setting that decides it.
  */
 @Composable
-private fun NextSolveTip() {
+private fun NextSolveTip(anyMoveStartsNewSolve: Boolean) {
+    if (anyMoveStartsNewSolve) {
+        Text(
+            text = stringResource(Res.string.solve_tip_any_move),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 6.dp, start = 12.dp, end = 12.dp),
+        )
+        return
+    }
     val prefix = stringResource(Res.string.solve_tip_uu_prefix)
     val suffix = stringResource(Res.string.solve_tip_uu_suffix)
     val highlight = MaterialTheme.colorScheme.primary
