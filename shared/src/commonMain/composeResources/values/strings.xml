@@ -2,7 +2,7 @@
 <resources>
     <!--Language-independent system strings that should not be changed or redeclared in translated/localized versions of this file-->
         <string name="app_name">QBSmarter</string>
-        <string name="app_version">v1.2.1</string>
+        <string name="app_version">v1.3.0</string>
     <!--End of language-independent system strings-->
 
     <string name="report_bug">Report a bug</string>
