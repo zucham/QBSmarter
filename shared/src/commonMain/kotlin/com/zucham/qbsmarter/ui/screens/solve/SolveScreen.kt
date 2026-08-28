@@ -608,8 +608,8 @@ private fun ThemedToggleButton(
             contentColor = contentColor,
         ),
     ) {
-        ActiveDot(visible = checked)
         Text(label, fontSize = SolveSizes.actionButtonFontSize, maxLines = 1)
+        ActiveDot(visible = checked)
     }
 }
 
@@ -660,12 +660,12 @@ private fun ActiveDot(visible: Boolean) {
             ),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
+            Spacer(Modifier.width(ActiveDotGap))
             Box(
                 modifier = Modifier
                     .size(ConnectionDotSize)
                     .background(StatusColors.ConnectedGreen, CircleShape),
             )
-            Spacer(Modifier.width(ActiveDotGap))
         }
     }
 }
