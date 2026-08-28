@@ -871,7 +871,7 @@ The `VerticalScrollbarBox` in this section overrides the default thumb color wit
 
 ##### Renaming a cube
 
-Two entry points, one dialog. The pencil beside the name in the paired list and the **Edit** button in the cube info dialog both set the same `pendingRename` state, so there is a single `RenameCubeDialog` to reason about. Editing from the info dialog *replaces* it rather than stacking on top: two modals deep over a list row is more chrome than the task deserves, and the info dialog's title is the very name being edited, so leaving it behind would show a stale value.
+Two entry points, one dialog. The pencil beside the name in the paired list and the **Edit** button in the cube info dialog both set the same `pendingRename` state, so there is a single `RenameCubeDialog` to reason about. In the info dialog **Edit** occupies the `confirmButton` slot (right-hand, the thumb's default target) and **Close** the `dismissButton` slot: the dialog is opened to look at a cube, and renaming it is the one thing you can actually *do* from there, so it gets the reachable position. Editing from the info dialog *replaces* it rather than stacking on top: two modals deep over a list row is more chrome than the task deserves, and the info dialog's title is the very name being edited, so leaving it behind would show a stale value.
 
 The pencil is deliberately below the 48 dp Material touch minimum (32 dp button, 18 dp glyph). It sits inline with the name, and a full-size target would push the name's baseline around and compete with Connect/Forget for the row's attention. The info dialog — one tap away, with a full-size Edit button — is the accessible route to the same action.
 

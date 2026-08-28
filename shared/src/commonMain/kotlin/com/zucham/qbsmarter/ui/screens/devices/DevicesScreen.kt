@@ -651,20 +651,21 @@ private fun CubeDetailDialog(
                 )
             }
         },
+        // Edit sits in the confirm slot so it lands on the right — the
+        // dialog is opened to look at a cube, and editing its name is the
+        // one action you can take from here, so it gets the thumb's
+        // default target. Close keeps the left-hand (dismiss) slot.
         confirmButton = {
+            DialogButton(
+                label = stringResource(Res.string.devices_edit),
+                onClick = onRename,
+            )
+        },
+        dismissButton = {
             DialogButton(
                 label = stringResource(Res.string.history_close),
                 onClick = onDismiss,
                 emphasis = DialogButtonEmphasis.NEUTRAL,
-            )
-        },
-        // Edit sits in the dismiss slot so it lands on the left, away
-        // from the thumb's default target — Close is the common exit and
-        // keeps the right-hand position.
-        dismissButton = {
-            DialogButton(
-                label = stringResource(Res.string.devices_edit),
-                onClick = onRename,
             )
         },
     )
