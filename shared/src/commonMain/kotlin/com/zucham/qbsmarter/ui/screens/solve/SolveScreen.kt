@@ -63,6 +63,7 @@ import com.zucham.qbsmarter.domain.cube.CubeMove
 import com.zucham.qbsmarter.domain.cube.isApproximatelyIdentity
 import com.zucham.qbsmarter.ui.components.DialogButton
 import com.zucham.qbsmarter.ui.components.DialogButtonEmphasis
+import com.zucham.qbsmarter.ui.components.suppressDrawerGesturesWhileTouched
 import com.zucham.qbsmarter.ui.screens.solve.stats.SolveSession
 import com.zucham.qbsmarter.ui.screens.solve.stats.StatRegistry
 import com.zucham.qbsmarter.util.formatDuration
@@ -231,7 +232,17 @@ fun SolveScreen(onNavigateToDevices: () -> Unit = {}) {
             // smaller of the two; on phones this is usually maxWidth
             // (cube fills column width), on tablets it can be maxHeight.
             val side = minOf(maxWidth, maxHeight)
-            Box(modifier = Modifier.size(side)) {
+            // suppressDrawerGesturesWhileTouched() is scoped to exactly
+            // this square: while a finger is down on the cube the side
+            // menu's swipe-to-open stands aside so the orientation drag
+            // gets the whole surface, and everywhere else in the app –
+            // including the rest of this screen – the swipe works
+            // normally. See DrawerGestures.kt.
+            Box(
+                modifier = Modifier
+                    .size(side)
+                    .suppressDrawerGesturesWhileTouched(),
+            ) {
                 CubeView(
                     cube = vm.cube,
                     modifier = Modifier.fillMaxSize(),

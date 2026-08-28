@@ -16,6 +16,8 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import kotlinx.coroutines.launch
@@ -47,20 +49,33 @@ fun AppScaffold(
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val scope = rememberCoroutineScope()
 
+    // One guard per scaffold, published to the whole content tree. Any
+    // region that conflicts with the drawer's swipe – today only the
+    // Solve screen's 3D cube – claims it for the duration of a touch.
+    val gestureGuard = remember { DrawerGestureGuard() }
+
     ModalNavigationDrawer(
         drawerState = drawerState,
-        // Gesture policy: enable as soon as the drawer is animating toward
-        // open OR is open. While fully closed, the Solve screen's 3D cube
-        // needs the full horizontal surface for orientation drags; an
-        // edge-swipe-to-open would steal those. Once the drawer is moving
-        // up, every dismiss gesture is welcome – system Back, swipe-close,
-        // scrim tap. We use `targetValue` (instead of `currentValue`) so
-        // gestures unlock the instant the user taps the hamburger, not
-        // only when the open animation finishes.
-        // BackHandler activation is internally tied to drawerState.isOpen
-        // by Material, so the back button works as long as the drawer is
-        // visible.
-        gesturesEnabled = drawerState.targetValue == DrawerValue.Open,
+        // Gesture policy, in two parts.
+        //
+        // Once the drawer is open (or animating toward open) every
+        // gesture is welcome – swipe-close, scrim tap, system Back. We
+        // read `targetValue` rather than `currentValue` so gestures
+        // unlock the instant the user taps the hamburger, not only when
+        // the open animation finishes. (BackHandler activation is tied
+        // to drawerState.isOpen internally by Material, so the back
+        // button works whenever the drawer is visible either way.)
+        //
+        // While closed, swipe-to-open is on everywhere *except* inside a
+        // region that has claimed [gestureGuard]. Material's drawer
+        // applies its drag detection to the entire content area rather
+        // than a screen-edge strip, so a horizontal drag on the Solve
+        // screen's 3D cube would otherwise be read as "open the menu"
+        // instead of "rotate the cube". Scoping the exception to the
+        // cube itself keeps the swipe available on every other screen –
+        // and on the rest of the Solve screen. See DrawerGestures.kt.
+        gesturesEnabled = drawerState.targetValue == DrawerValue.Open ||
+            !gestureGuard.isSuppressed,
         drawerContent = {
             AppDrawerContent(
                 entries = drawerEntries,
@@ -109,7 +124,9 @@ fun AppScaffold(
                 )
             },
         ) { padding ->
-            Box(modifier = Modifier.padding(padding)) { content() }
+            CompositionLocalProvider(LocalDrawerGestureGuard provides gestureGuard) {
+                Box(modifier = Modifier.padding(padding)) { content() }
+            }
         }
     }
 }

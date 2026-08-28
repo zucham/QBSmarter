@@ -647,7 +647,15 @@ The import flow also calls `flushApplied()` explicitly (already on Main, wrapped
 
 Owns the modal navigation drawer + `TopAppBar`. The TopAppBar uses theme `primaryContainer` so it picks up the seed color the user picked.
 
-Drawer **gestures are gated on `drawerState.targetValue == DrawerValue.Open`**. While fully closed, the Solve screen's 3D cube needs the full horizontal surface for orientation drags; an edge-swipe-to-open would steal them. Once the drawer starts opening (target = Open), every dismiss gesture is welcome.
+Drawer gestures: `gesturesEnabled = drawerState.targetValue == DrawerValue.Open || !gestureGuard.isSuppressed`.
+
+Once the drawer is open (or animating toward open) every gesture is welcome — swipe-close, scrim tap, Back. `targetValue` rather than `currentValue` so gestures unlock the instant the hamburger is tapped, not when the animation finishes.
+
+While closed, swipe-to-open works **everywhere except inside a region that has claimed the guard**. Material's `ModalNavigationDrawer` applies its drag detection to the whole content area rather than a screen-edge strip, so a horizontal drag on the Solve screen's 3D cube would otherwise read as "open the menu" instead of "rotate the cube". The previous fix disabled the open-gesture globally, which traded that for a smaller problem: swipe-to-open stopped working on every screen, including the four with no conflict at all.
+
+`DrawerGestureGuard` (in `ui/components/DrawerGestures.kt`) is a counter published through `LocalDrawerGestureGuard`, provided by `AppScaffold` around its content. `Modifier.suppressDrawerGesturesWhileTouched()` claims it for the duration of a touch and is applied to exactly one element: the square `Box` holding `CubeView`.
+
+Two details make the timing work. The latch happens on `PointerEventPass.Initial` of the down event — the earliest any node sees it, and before any drag has begun, since a `draggable` only claims a gesture once touch slop is crossed, which takes at least one further pointer event. And **nothing is consumed**: the events continue to the Korender surface underneath exactly as before, so cube rotation is untouched. The guard observes the gesture, it doesn't take it.
 
 #### Drawer
 
