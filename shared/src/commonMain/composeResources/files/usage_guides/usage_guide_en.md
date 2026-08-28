@@ -210,6 +210,7 @@ Below the profile list you'll find two buttons:
 
 ### Advanced
 
+- **`Cube auto-disconnect`** - how long the app can stay in the background before the connected cube is disconnected. A connected cube keeps its Bluetooth radio awake and drains its battery, so a shorter period saves the cube's charge; a longer one means you can leave the app for a moment without having to reconnect. Choose **Never** to keep the cube connected until you disconnect it yourself. The default is 5 minutes.
 - **`Use caching`** - the app keeps frequently used data in memory for faster screen transitions. We recommend keeping this setting on for the best experience.
 
 ### About

@@ -103,6 +103,11 @@ class SettingsViewModel(
         settingsRepo.setBool(uid, key, value)
     }
 
+    fun setInt(key: String, value: Int) {
+        val uid = activeProfile.idSnapshot() ?: return
+        settingsRepo.setInt(uid, key, value)
+    }
+
     fun setSeed(seed: ThemeSeed) = themeController.setSeed(seed)
     fun setMode(mode: ThemeMode) = themeController.setMode(mode)
     fun setLanguage(language: AppLanguage) = localeController.setLanguage(language)
@@ -467,6 +472,7 @@ class SettingsViewModel(
          */
         val ALLOWED_SETTING_KEYS = setOf(
             SettingsRepository.Keys.INSPECTION_ENABLED,
+            SettingsRepository.Keys.AUTO_DISCONNECT_MINUTES,
             // SettingsRepository.Keys.SOUND_ENABLED,  // disabled – see SettingsRepository.Keys
             SettingsRepository.Keys.KEEP_SCREEN_ON,
             SettingsRepository.Keys.GYRO_ENABLED,

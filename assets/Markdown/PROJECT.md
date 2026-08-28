@@ -617,7 +617,7 @@ In-memory cache for hot reads. When enabled (default), holds `StateFlow` snapsho
 
 Every flow is keyed off `activeProfile.id` via `flatMapLatest`. Profile switch = automatic cancellation + restart on the new id, no manual invalidation.
 
-All of them except `settings` are additionally gated by `enabled`. When `setEnabled(false)` is called, gated flows emit defaults (empty/null/0) and stop re-observing. Synchronous typed reads (`boolSetting`, `snapshotPairedCubes`) fall through to the repository. Toggle back on → observers automatically resubscribe.
+All of them except `settings` are additionally gated by `enabled`. When `setEnabled(false)` is called, gated flows emit defaults (empty/null/0) and stop re-observing. Synchronous typed reads (`boolSetting`, `intSetting`, `snapshotPairedCubes`) fall through to the repository. Toggle back on → observers automatically resubscribe.
 
 ##### Why `settings` is not gated
 
@@ -1112,8 +1112,16 @@ Order matters because several singletons assume the active profile exists:
 
 `AppLifecycle` (driven by `ProcessLifecycleOwner` on Android):
 
-- **on backgrounded**: `ble.stopScan()` immediately; schedule auto-disconnect after 5 minutes (`DISCONNECT_AFTER_BG_MS`) to save the cube's battery
+- **on backgrounded**: `ble.stopScan()` immediately; arm an auto-disconnect timer to save the cube's battery — a smart cube holding a BLE link keeps its radio awake and will flatten itself overnight
 - **on foregrounded**: cancel the pending auto-disconnect
+
+#### Auto-disconnect period
+
+The period is the per-profile setting `cube.autoDisconnectMinutes` (default `SettingsRepository.Defaults.AUTO_DISCONNECT_MINUTES` = 5), read through `AppCache.intSetting`. **0 means never**, not "immediately": a zero-length period would be a setting whose only effect is to make the feature unusable, while "stay connected until I say otherwise" is something people actually want. `AppLifecycle` guards on `minutes <= 0` rather than `== 0`, so a negative value from a hand-edited or imported bundle also reads as "off" instead of arming a zero-length timer.
+
+The value is **read once, when the app is backgrounded**, not observed. This is the correct shape rather than a shortcut: the only instant it matters is when the timer is armed, and between then and the disconnect the app is in the background where the user cannot be changing it. Observing it would mean holding a subscription open across the whole background period to react to a change that cannot happen. A change made while the app is open governs the *next* backgrounding — which is also the only sequence a user can observe.
+
+The picker (Settings → Advanced) offers 1 / 2 / 5 / 10 / 15 / 30 minutes and Never. It's a dropdown rather than a segmented row because seven options would either wrap or shrink to unreadable on a phone. A stored value outside that set (hand-edited, or imported from a build with different periods) is added to the menu as a normal entry rather than silently rewritten, so the control never misreports what is in effect.
 
 ### Lifecycle-gated CubeView
 
@@ -1360,8 +1368,11 @@ solving.anyMoveStartsNewSolve "1"/"0" default true
 display.theme.seed          ThemeSeed.key – "blue", "green", "purple", "orange", "red", "pink", "yellow", "mono"
 display.theme.mode          ThemeMode.key – "system", "light", "dark"
 display.ui.language         AppLanguage.key – "system", "en", "cs"
+cube.autoDisconnectMinutes  whole minutes as a decimal string, 0 = never   default 5
 app.cacheEnabled            "1"/"0"   default true
 ```
+
+Boolean defaults stay inline at their call sites — there are only two candidate values and the switch row and its reader are usually the same screen. `cube.autoDisconnectMinutes` is different: the Settings picker and `AppLifecycle` read it independently, so its default lives in `SettingsRepository.Defaults` where both can see it. "The picker shows 5 but backgrounding uses 10" is exactly the drift a shared constant prevents.
 
 `solving.soundEnabled` is **commented out** in `SettingsRepository.Keys` and `SettingsViewModel.ALLOWED_SETTING_KEYS`, and the corresponding switch row in `SettingsScreen.kt` is also commented out. The associated string resource (`settings_sound`) is preserved in both `values/strings.xml` and `values-cs/strings.xml`. Re-enabling the setting is a multi-line revert (uncomment all four sites). The setting was hidden because the cube-event sound design hasn't landed yet; persisting a switch the user can flip but that does nothing was confusing.
 

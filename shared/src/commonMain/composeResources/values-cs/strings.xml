@@ -127,6 +127,10 @@
     <string name="settings_language">Volba jazyka</string>
     <string name="settings_theme">Vzhled</string>
     <string name="settings_theme_color">Barva</string>
+    <string name="settings_auto_disconnect">Automatické odpojení kostky</string>
+    <string name="settings_auto_disconnect_explanation">Jak dlouho může aplikace běžet na pozadí, než se kostka odpojí. Připojená kostka udržuje Bluetooth v provozu, takže kratší doba šetří její baterii. Zvolte Nikdy, pokud chcete kostku nechat připojenou, dokud ji neodpojíte sami.</string>
+    <string name="settings_auto_disconnect_never">Nikdy</string>
+    <string name="settings_minutes">%1$d min</string>
     <string name="settings_cache_enabled">Používat mezipaměť</string>
     <string name="settings_cache_explanation">Zrychluje přechody mezi obrazovkami uložením často používaných dat do paměti. Může vést k nepatrně vyšší spotřebě paměti. Pro optimální zážitek nechte použití mezipaměti zapnuté.</string>
 

@@ -185,6 +185,24 @@ class AppCache(
         return settingsRepo.getBool(uid, key, default)
     }
 
+    /**
+     * Integer setting for the active profile. Same fall-through shape as
+     * [boolSetting]: cached map first, repository second, caller's
+     * default last.
+     *
+     * A stored value that isn't a number falls through to the repository
+     * rather than to [default], so the two paths agree on what a corrupt
+     * row means (the repository's `toIntOrNull() ?: default` decides it
+     * once).
+     */
+    fun intSetting(key: String, default: Int): Int {
+        val uid = activeProfile.idSnapshot() ?: return default
+        if (_enabled.value) {
+            settings.value[key]?.toIntOrNull()?.let { return it }
+        }
+        return settingsRepo.getInt(uid, key, default)
+    }
+
     fun snapshotPairedCubes(): List<PairedCube> {
         val uid = activeProfile.idSnapshot() ?: return emptyList()
         return if (_enabled.value) pairedCubes.value

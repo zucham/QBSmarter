@@ -156,6 +156,24 @@ class SettingsRepository(
         /** AppLanguage.key – "system", "en", "cs". */
         const val LANGUAGE = "display.ui.language"
 
+        // Cube connection
+        /**
+         * Whole minutes, as a decimal string. Default
+         * [Defaults.AUTO_DISCONNECT_MINUTES]. How long the app stays in
+         * the background before it drops the cube's BLE link to save the
+         * cube's battery — a smart cube left connected keeps its radio
+         * awake and will flatten itself overnight.
+         *
+         * **0 means never**, not "immediately": a period of zero would be
+         * a setting whose only effect is to make the feature unusable,
+         * whereas "stay connected until I say otherwise" is a thing
+         * people actually want (leaving the app for a moment to answer a
+         * message shouldn't cost a reconnect). The value is only read at
+         * the moment the app is backgrounded, so a change takes effect
+         * from the next time that happens.
+         */
+        const val AUTO_DISCONNECT_MINUTES = "cube.autoDisconnectMinutes"
+
         // App-wide tuning (per profile so individual users can opt out)
         /**
          * "1" / "0". Default true. When true, the app warms an in-memory
@@ -163,5 +181,20 @@ class SettingsRepository(
          * for snappier UI. Turning off frees the cache immediately.
          */
         const val CACHE_ENABLED = "app.cacheEnabled"
+    }
+
+    /**
+     * Defaults that more than one call site has to agree on.
+     *
+     * Boolean defaults stay inline at their call sites – there are only
+     * ever two candidate values and the switch row and its reader are
+     * usually the same screen. A numeric default is different: the
+     * Settings UI and [com.zucham.qbsmarter.app.AppLifecycle] read this
+     * one independently, and "the picker shows 5 but backgrounding uses
+     * 10" is precisely the drift a shared constant exists to prevent.
+     */
+    object Defaults {
+        /** Minutes in the background before the cube link is dropped. */
+        const val AUTO_DISCONNECT_MINUTES = 5
     }
 }

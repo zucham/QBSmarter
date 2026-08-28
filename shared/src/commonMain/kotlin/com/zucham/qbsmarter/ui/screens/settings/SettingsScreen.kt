@@ -102,6 +102,9 @@ import qbsmarter.shared.generated.resources.profile_ok
 import qbsmarter.shared.generated.resources.profile_settings_open
 import qbsmarter.shared.generated.resources.profile_settings_title
 import qbsmarter.shared.generated.resources.profile_total_solves
+import qbsmarter.shared.generated.resources.settings_auto_disconnect
+import qbsmarter.shared.generated.resources.settings_auto_disconnect_explanation
+import qbsmarter.shared.generated.resources.settings_auto_disconnect_never
 import qbsmarter.shared.generated.resources.settings_any_move_new_solve
 import qbsmarter.shared.generated.resources.settings_any_move_new_solve_explanation
 import qbsmarter.shared.generated.resources.settings_cache_enabled
@@ -113,6 +116,7 @@ import qbsmarter.shared.generated.resources.settings_import
 import qbsmarter.shared.generated.resources.settings_inspection
 import qbsmarter.shared.generated.resources.settings_keep_screen_on
 import qbsmarter.shared.generated.resources.settings_language
+import qbsmarter.shared.generated.resources.settings_minutes
 import qbsmarter.shared.generated.resources.settings_section_about
 import qbsmarter.shared.generated.resources.settings_section_advanced
 import qbsmarter.shared.generated.resources.settings_section_display
@@ -226,6 +230,14 @@ fun SettingsScreen() {
             }
         }
         SettingsSection(stringResource(Res.string.settings_section_advanced)) {
+            LabeledControl(stringResource(Res.string.settings_auto_disconnect)) {
+                AutoDisconnectPicker(vm)
+            }
+            Text(
+                stringResource(Res.string.settings_auto_disconnect_explanation),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
             // Cache toggle. The setting is honoured immediately by AppCache:
             // turning it off drops cached data in real-time, turning it
             // back on warms up new observers.
@@ -814,6 +826,82 @@ private fun SwitchRow(label: String, key: String, default: Boolean, vm: Settings
         Switch(checked = checked, onCheckedChange = { vm.setBool(key, it) })
     }
 }
+
+/**
+ * Period picker for the cube's background auto-disconnect.
+ *
+ * A dropdown rather than a segmented row (which is what the theme and
+ * language controls use): those have three and two options, this has
+ * seven, and seven segments on a phone would either wrap or shrink the
+ * labels to unreadable. The button carries the current value, so the
+ * setting is legible without opening anything.
+ *
+ * Reads through the cached settings map for the same reason [SwitchRow]
+ * does — switching profiles while this screen is open recomposes it with
+ * the new profile's value, since the period travels with the profile like
+ * every other setting.
+ *
+ * The stored value is whole minutes, with **0 meaning never**; see
+ * [SettingsRepository.Keys.AUTO_DISCONNECT_MINUTES].
+ */
+@Composable
+private fun AutoDisconnectPicker(vm: SettingsViewModel) {
+    val settings by vm.cacheSettings.collectAsState()
+    val current = settings[SettingsRepository.Keys.AUTO_DISCONNECT_MINUTES]?.toIntOrNull()
+        ?: SettingsRepository.Defaults.AUTO_DISCONNECT_MINUTES
+
+    var expanded by remember { mutableStateOf(false) }
+
+    Box {
+        OutlinedButton(onClick = { expanded = true }) {
+            Text(autoDisconnectLabel(current), maxLines = 1)
+            Icon(
+                imageVector = Icons.Filled.ArrowDropDown,
+                contentDescription = null,  // decorative; the label says it
+            )
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            // A stored value outside the offered set (hand-edited, or
+            // imported from a build that offered different periods) is
+            // shown as a normal entry rather than silently rewritten, so
+            // the picker never lies about what is in effect. Sorted with
+            // "never" last: it reads as the end of an increasing scale,
+            // which is what an unbounded period is.
+            val options = (AUTO_DISCONNECT_OPTIONS + current).distinct()
+                .sortedBy { if (it <= 0) Int.MAX_VALUE else it }
+            for (minutes in options) {
+                DropdownMenuItem(
+                    text = { Text(autoDisconnectLabel(minutes)) },
+                    onClick = {
+                        expanded = false
+                        vm.setInt(SettingsRepository.Keys.AUTO_DISCONNECT_MINUTES, minutes)
+                    },
+                )
+            }
+        }
+    }
+}
+
+/** "Never" for 0, "<n> min" otherwise. */
+@Composable
+private fun autoDisconnectLabel(minutes: Int): String =
+    if (minutes <= 0) stringResource(Res.string.settings_auto_disconnect_never)
+    else stringResource(Res.string.settings_minutes, minutes)
+
+/**
+ * Offered auto-disconnect periods, in minutes; 0 is "never".
+ *
+ * Coarser as it grows — 1, 2, 5, 10, 15, 30 — because the precision a
+ * user cares about scales with the value: the difference between 1 and 2
+ * minutes is the difference between "reconnects while I read a message"
+ * and "doesn't", while nobody has an opinion distinguishing 25 from 30.
+ *
+ * "Never" is offered because the alternative is a feature the user cannot
+ * turn off. Someone practising with the app open beside a video, or on a
+ * charger, is entitled to keep the link up; forcing a floor of one minute
+ * on them would just teach them to distrust the setting.
+ */
+private val AUTO_DISCONNECT_OPTIONS = listOf(1, 2, 5, 10, 15, 30, 0)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable

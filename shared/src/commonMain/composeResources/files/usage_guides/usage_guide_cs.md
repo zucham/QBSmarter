@@ -210,6 +210,7 @@ Pod seznamem profilů najdete dvě tlačítka:
 
 ### Pokročilé
 
+- **`Automatické odpojení kostky`** - jak dlouho může aplikace běžet na pozadí, než se připojená kostka odpojí. Připojená kostka udržuje Bluetooth v provozu a vybíjí si baterii, takže kratší doba šetří její nabití; delší naopak znamená, že můžete aplikaci na chvíli opustit bez nutnosti se znovu připojovat. Volba **Nikdy** ponechá kostku připojenou, dokud ji neodpojíte sami. Výchozí hodnota je 5 minut.
 - **`Používat mezipaměť`** - aplikace si pro rychlejší přechody mezi obrazovkami drží často používaná data v paměti. Volbu doporučujeme nechat zapnutou pro nejlepší zážitek.
 
 ### O aplikaci

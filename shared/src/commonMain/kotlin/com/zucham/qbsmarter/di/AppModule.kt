@@ -109,7 +109,7 @@ val sharedModule = module {
     single<SmartCubeDriver> { get<ProtocolCubeDriver>() }
 
     // -- App lifecycle wiring -------------------------------------------
-    single { AppLifecycle(ble = get(), driver = get()) }
+    single { AppLifecycle(ble = get(), driver = get(), cache = get()) }
 
     // -- Connection orchestrator ----------------------------------------
     single {

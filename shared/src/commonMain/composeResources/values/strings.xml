@@ -135,6 +135,10 @@
     <string name="settings_language">Language selection</string>
     <string name="settings_theme">Theme</string>
     <string name="settings_theme_color">Color</string>
+    <string name="settings_auto_disconnect">Cube auto-disconnect</string>
+    <string name="settings_auto_disconnect_explanation">How long the app can stay in the background before the cube is disconnected. A connected cube keeps its Bluetooth radio awake, so a shorter period saves the cube's battery; choose Never to keep the cube connected until you disconnect it yourself.</string>
+    <string name="settings_auto_disconnect_never">Never</string>
+    <string name="settings_minutes">%1$d min</string>
     <string name="settings_cache_enabled">Use caching</string>
     <string name="settings_cache_explanation">Speeds up screen transitions by holding hot data in memory. May lead to slight memory consumption increase. Leave this setting on for optimal experience.</string>
 
