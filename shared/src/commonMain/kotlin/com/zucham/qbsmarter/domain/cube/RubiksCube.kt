@@ -215,6 +215,27 @@ class RubiksCube {
     }
 
     /**
+     * Snap the rendered cube onto the nearest axis-aligned pose.
+     *
+     * The Gyro button's off-switch calls this. While the gyro is
+     * running, the drag offset is composed with a live orientation that
+     * is almost never square to the camera, and the orbiter's own
+     * drag-end auto-snap is suppressed for exactly that reason (see
+     * [CubeOrbiter]'s kdoc). Switching the gyro off removes the live
+     * half, and what is left - a drag offset that has been accumulating
+     * un-snapped for as long as the gyro was on - is the half that can,
+     * and now should, be squared up.
+     *
+     * @return false when the cube has no bound scope (the Solve screen
+     *   isn't composed), in which case nothing is animated.
+     */
+    fun snapOrientationToAxes(): Boolean {
+        val scope = ownedScope ?: return false
+        scope.launch { orbiter.snapToNearest() }
+        return true
+    }
+
+    /**
      * Return the cube view to a clean slate: solved, default
      * orientation, no gyro pose.
      *

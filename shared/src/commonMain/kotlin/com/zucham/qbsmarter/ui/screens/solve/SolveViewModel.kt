@@ -486,6 +486,20 @@ class SolveViewModel(
     fun toggleGyro() {
         val next = !_gyroEnabled.value
         _gyroEnabled.value = next
+        if (!next) {
+            // Apply the switch-off here rather than waiting for the
+            // [_gyroEnabled] collector: the snap below and the gyro's
+            // own ease-back-to-identity should start on the same frame,
+            // and a flow hop would stagger them by a dispatch. The
+            // collector still runs and setEnabled is idempotent.
+            cube.gyroscope.setEnabled(false)
+            // Square the cube up. The orbiter's drag-end auto-snap is
+            // suppressed for as long as the gyro is on, so the drag
+            // offset can be at any angle by the time the user switches
+            // off; this is the moment it becomes meaningful (and
+            // possible) to land it on an axis again.
+            cube.snapOrientationToAxes()
+        }
         val uid = activeProfile.idSnapshot()
         if (uid == null) {
             log.w { "toggleGyro: no active profile, not persisting" }
