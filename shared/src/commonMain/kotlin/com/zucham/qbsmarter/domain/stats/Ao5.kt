@@ -12,23 +12,48 @@ package com.zucham.qbsmarter.domain.stats
  * first two both call this; the third is a transcription of these same
  * rules into SQL, and is commented as such at both ends.
  *
- * ## The rule
+ * ## The rule — WCA 9f8 and 9f9
  *
- * An Ao5 is over the five most recent solves ending at (and including)
- * the one it belongs to, working in **effective** time — `duration_ms +
- * penalty_ms`, so a +2 counts — and treating a DNF as having no time at
- * all rather than as a large one.
+ * Taken from the regulations verbatim, because the WCA definition is the
+ * one this app follows wherever a cubing convention is in question:
+ *
+ *  * **9f8** — "of these 5 attempts, the best and worst attempts are
+ *    removed, and the arithmetic mean of the remaining 3 attempts
+ *    determines the competitor's ranking".
+ *  * **9f9** — "one DNF or DNS is permitted to count as the competitor's
+ *    worst result of the round. If a competitor has more than one DNF
+ *    and/or DNS result in the round, their average result for the round
+ *    is DNF."
+ *
+ * The window is the five most recent solves ending at (and including)
+ * the one the average belongs to, in **effective** time — `duration_ms +
+ * penalty_ms`, so a +2 counts.
  *
  *  * fewer than five solves so far → no window, no average;
  *  * five valid times → drop the best and the worst, mean the middle
  *    three;
- *  * four valid times and one DNF → the DNF *is* the worst, so drop it
- *    and the best, and mean the remaining three;
- *  * two or more DNFs → no average. Two of the middle three would have
- *    no time, and the WCA rule is that the average is itself a DNF.
+ *  * four valid times and one DNF → the DNF *is* the worst (9f9), so
+ *    drop it and the best, and mean the remaining three;
+ *  * two or more DNFs → no average (9f9).
  *
  * The last case is why [Result.times] and [Result.ao5Ms] are nullable
  * independently: a window can exist and still produce no number.
+ *
+ * ## A DNF is an attempt, not a gap
+ *
+ * Worth stating explicitly, because the intuition runs the other way: a
+ * DNF solve is **not** skipped when building the windows of the solves
+ * that follow it. It occupies one of their five slots and is trimmed
+ * there as their worst result, which is exactly what 9f9 describes — so
+ * one DNF touches the five averages it appears in, and each of those
+ * still averages three real times.
+ *
+ * Excluding it from those windows instead would mean averaging five
+ * *timed* solves drawn from six attempts, which is not an Ao5 of
+ * anything the WCA defines.
+ *
+ * Verified against an independent transcription of 9f8/9f9 over every
+ * DNF pattern across five attempts, in several orderings, plus ties.
  */
 object Ao5 {
 

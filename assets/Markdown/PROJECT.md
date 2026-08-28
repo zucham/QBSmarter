@@ -1449,7 +1449,14 @@ Measured on a 100,000-solve database:
 
 ### Ao5 as a maintained column
 
-An Ao5 belongs to a solve but is a fact about its *neighbours*, which is what makes it awkward. `domain/stats/Ao5.kt` is the single definition — effective time, DNF as "no time" rather than a large one, drop best and worst, two DNFs means no average — and every path that can invalidate a stored value re-derives it through that one object:
+An Ao5 belongs to a solve but is a fact about its *neighbours*, which is what makes it awkward. `domain/stats/Ao5.kt` is the single definition, transcribed from **WCA 9f8 and 9f9**: drop the best and worst of the five and mean the remaining three; one DNF counts as the worst result; more than one and the average is DNF. Everything works in effective time, so a +2 counts.
+
+**A DNF is an attempt, not a gap.** It is not skipped when building the windows of the solves that follow it — it takes one of their five slots and is trimmed there as their worst result, so a single DNF touches the five averages it appears in and each of those still averages three real times. This is 9f9 as written, and the intuition to "leave DNFs out" would mean averaging five *timed* solves drawn from six attempts, which is not an Ao5 of anything the regulations define. The implementation is checked against an independent transcription of 9f8/9f9 across every DNF pattern over five attempts.
+
+The one deliberate departure is `MeanStat`, which excludes DNFs rather than returning DNF. WCA 9f11 makes any DNF poison a mean-of-3, but a session mean over a hundred solves that reads "DNF" because one attempt failed is useless; this follows the practice-timer convention instead.
+
+Every path that can invalidate a stored value re-derives it through that one object:
+
 
 | event | what is repaired |
 |---|---|
