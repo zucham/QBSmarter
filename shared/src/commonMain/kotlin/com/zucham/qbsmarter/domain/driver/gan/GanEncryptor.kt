@@ -13,7 +13,7 @@ import com.zucham.qbsmarter.domain.driver.protocol.CubeIdentity
  * because the key must be chosen before the very first packet can be
  * decrypted. Both reference implementations do exactly this.
  */
-enum class GanKeySet(val rootKey: ByteArray, val rootIv: ByteArray) {
+internal enum class GanKeySet(val rootKey: ByteArray, val rootIv: ByteArray) {
 
     /**
      * Every genuine GAN cube, across Gen2, Gen3 and Gen4. The
@@ -86,7 +86,7 @@ enum class GanKeySet(val rootKey: ByteArray, val rootIv: ByteArray) {
  * Constants are reverse-engineered from the official GAN app and
  * verified against the gan-web-bluetooth project.
  */
-class GanEncryptor(
+internal class GanEncryptor(
     salt: ByteArray,
     keySet: GanKeySet = GanKeySet.STANDARD,
 ) : CubeEncryptor {
