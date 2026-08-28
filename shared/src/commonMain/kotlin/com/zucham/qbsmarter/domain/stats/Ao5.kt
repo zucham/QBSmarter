@@ -73,6 +73,45 @@ object Ao5 {
     }
 
     /**
+     * Which of the five entries were **dropped** from the average: the
+     * fastest and the slowest, by exactly the rule [compute] applies.
+     *
+     * Returned as indices into the list [parseTimes] produces, so the UI
+     * can bracket the two that did not count without re-deriving which
+     * ones they were and risking a different answer from the number
+     * printed beside them.
+     *
+     * Three details that a naive "min and max" would get wrong:
+     *
+     *  * **A DNF is the slowest**, not a missing value to be skipped. If
+     *    the window holds one, it is the dropped-slowest and the real
+     *    slowest time still counts toward the mean.
+     *  * **Ties drop one entry, not both.** Five solves of which two are
+     *    the identical fastest time drop one of them; the other is part
+     *    of the middle three. Marking both would show four brackets
+     *    around a three-solve average.
+     *  * **No average, no brackets.** Two or more DNFs mean there is no
+     *    Ao5 at all, and brackets whose meaning is "excluded from the
+     *    average" are meaningless without one. Returns empty.
+     */
+    fun trimmedIndices(times: List<Long?>): Set<Int> {
+        if (times.size < WINDOW) return emptySet()
+        val validCount = times.count { it != null }
+        if (validCount < WINDOW - 1) return emptySet()
+
+        val dnfIndex = times.indexOfFirst { it == null }
+        val slowest = if (dnfIndex >= 0) {
+            dnfIndex
+        } else {
+            times.indices.maxByOrNull { times[it]!! } ?: return emptySet()
+        }
+        val fastest = times.indices
+            .filter { it != slowest && times[it] != null }
+            .minByOrNull { times[it]!! } ?: return emptySet()
+        return setOf(slowest, fastest)
+    }
+
+    /**
      * Read back a stored [Result.times] as effective times, oldest first,
      * with null for each DNF.
      *

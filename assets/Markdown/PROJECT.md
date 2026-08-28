@@ -31,6 +31,7 @@ This document captures everything a developer should know to work on QBSmarter p
    - [Record queries and the ranking index](#record-queries-and-the-ranking-index)
    - [Ao5 as a maintained column](#ao5-as-a-maintained-column)
    - [Solve reconstruction: `solve_moves` and `solve_gyro`](#solve-reconstruction-solve_moves-and-solve_gyro)
+   - [Surfacing the new data](#surfacing-the-new-data)
    - [SQLDelight single-column queries](#sqldelight-single-column-queries)
    - [Foreign keys](#foreign-keys)
 10. [Permissions, edge-to-edge & system bars](#permissions-edge-to-edge--system-bars)
@@ -1486,6 +1487,30 @@ Two counter-intuitive results are worth keeping. **The threshold barely matters*
 **Retention.** Move tracks are never pruned; at 1.6 MB per 10,000 solves there is no reason to. `solve_gyro` denormalises `user_id` and `solved_at` from its parent — the one deliberate duplication in this schema — so every retention rule is an indexed DELETE with no join: keep the newest N, drop everything older than a date, drop all of it. `pinned` exempts a track from all of them and is set automatically for a solve holding a record, so no housekeeping can quietly delete the replay of a personal best. `putGyro`'s upsert deliberately does **not** take `pinned` from the excluded row, so re-recording cannot clear a pin.
 
 `pruneGyroKeepingNewest` is phrased as "delete everything not in the newest N" rather than as a cutoff timestamp: an OFFSET is one row off from the count it reads like, and two solves sharing a `solved_at` to the millisecond cannot be separated by a comparison. The subquery names exactly N rows under a total order (`solved_at DESC, solve_id DESC`) and everything else goes.
+
+### Surfacing the new data
+
+**History detail dialog.** Gained the cube the solve was done on, the five times
+behind its Ao5, and the recorded move sequence.
+
+The five times come from `Ao5.parseTimes`, and the two that were *dropped* from
+the average are bracketed and dimmed. Which two those are comes from
+`Ao5.trimmedIndices`, not from a local `min`/`max`, so the brackets can never
+contradict the average printed above them — and the three cases a naive min/max
+gets wrong all occur in real data: a DNF is the *slowest* result rather than a
+missing one; two entries tied for fastest drop only one of themselves; and a
+window with two DNFs has no average at all, so nothing is bracketed.
+
+The move track shows notation and a turn count, not the per-move timings. The
+timings are stored — that is what makes a full reconstruction possible — but a
+column of fifty-five timestamps is not something anyone reads; they belong in a
+replay or a graph, neither of which belongs in an `AlertDialog`.
+
+The dialog's state moved from composable `remember` into `HistoryViewModel`,
+because opening it now reads a blob from the database: in composable state that
+query would re-run on every configuration change. `SolveDetail.loaded`
+distinguishes "no moves recorded" from "moves not read yet", so the dialog never
+flashes the former at a user about to get the latter.
 
 ### SQLDelight single-column queries
 

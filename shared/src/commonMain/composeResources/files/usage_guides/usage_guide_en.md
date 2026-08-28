@@ -157,10 +157,15 @@ Each record in the list contains:
 **Tap a record** to open a detail dialog containing:
 
 - The solve's date and time.
+- Which cube the solve was done on.
 - The scramble used.
-- The Average of 5 (Ao5) at that moment.
+- The Average of 5 (Ao5) at that moment, followed by the five times it was
+  calculated from, oldest first. The fastest and the slowest of the five are
+  shown **in brackets** - those two do not count toward the average, only the
+  middle three do. A DNF among them counts as the slowest result.
 - Fluency (TPS - turns per second) at that moment.
 - The number of turns performed during the solve.
+- The turns themselves, in standard notation.
 
 The detail dialog also contains a **Delete** button for removing the record (with a confirmation step).
 

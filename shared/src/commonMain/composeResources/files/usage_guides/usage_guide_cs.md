@@ -157,10 +157,15 @@ Každý záznam v seznamu obsahuje:
 **Klepnutím na záznam** otevřete detailní dialog, který obsahuje:
 
 - Datum a čas složení.
+- Kostku, na které bylo složení provedeno.
 - Použité zamíchání (scramble).
-- Průměr z posledních pěti složení (Ao5).
+- Průměr z posledních pěti složení (Ao5) a za ním pětici časů, ze kterých byl
+  spočítán, od nejstaršího. Nejrychlejší a nejpomalejší z nich jsou uvedeny
+  **v závorkách** - tyto dva se do průměru nepočítají, počítají se pouze
+  prostřední tři. Případné DNF se počítá jako nejpomalejší výsledek.
 - Plynulost (TPS - turns per second, počet otoček za vteřinu).
 - Počet otáček (turns) provedených během složení.
+- Samotné otáčky v standardní notaci.
 
 V detailním dialogu najdete i tlačítko **Smazat** pro odstranění záznamu (s potvrzením).
 

@@ -16,7 +16,9 @@ import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -45,6 +47,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.zucham.qbsmarter.data.db.SolveRow
 import com.zucham.qbsmarter.data.db.SolveSort
+import com.zucham.qbsmarter.domain.reconstruction.TrackedMove
+import com.zucham.qbsmarter.domain.stats.Ao5
 import com.zucham.qbsmarter.ui.components.ConfirmationDialog
 import com.zucham.qbsmarter.ui.components.DialogButton
 import com.zucham.qbsmarter.ui.components.DialogButtonEmphasis
@@ -57,11 +61,16 @@ import org.jetbrains.compose.resources.stringResource
 import org.koin.compose.viewmodel.koinViewModel
 import qbsmarter.shared.generated.resources.Res
 import qbsmarter.shared.generated.resources.devices_cancel
+import qbsmarter.shared.generated.resources.history_ao5_times
+import qbsmarter.shared.generated.resources.history_ao5_trimmed_hint
 import qbsmarter.shared.generated.resources.history_close
+import qbsmarter.shared.generated.resources.history_cube
 import qbsmarter.shared.generated.resources.history_date
 import qbsmarter.shared.generated.resources.history_delete
 import qbsmarter.shared.generated.resources.history_delete_message
 import qbsmarter.shared.generated.resources.history_delete_title
+import qbsmarter.shared.generated.resources.history_moves
+import qbsmarter.shared.generated.resources.history_moves_none
 import qbsmarter.shared.generated.resources.history_scramble_label
 import qbsmarter.shared.generated.resources.history_sort_fastest
 import qbsmarter.shared.generated.resources.history_sort_newest
@@ -71,6 +80,7 @@ import qbsmarter.shared.generated.resources.history_swipe_hint
 import qbsmarter.shared.generated.resources.history_total_one
 import qbsmarter.shared.generated.resources.history_total_other
 import qbsmarter.shared.generated.resources.history_turns
+import qbsmarter.shared.generated.resources.solve_dnf
 import qbsmarter.shared.generated.resources.stat_ao5
 import qbsmarter.shared.generated.resources.stat_fluency
 
@@ -145,7 +155,11 @@ fun HistoryScreen() {
             }
     }
 
-    var detail by remember { mutableStateOf<SolveRow?>(null) }
+    // The open detail dialog lives in the ViewModel, not here: opening it
+    // reads the solve's move track from the database, and holding it in
+    // composable state would re-run that query on every configuration
+    // change and lose it on every process death.
+    val detail by vm.detail.collectAsState()
     var pendingDelete by remember { mutableStateOf<SolveRow?>(null) }
 
     Column(modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 8.dp)) {
@@ -198,7 +212,7 @@ fun HistoryScreen() {
                     SwipeableSolveItem(
                         row = row,
                         pendingDeleteId = pendingDelete?.id,
-                        onTap = { detail = row },
+                        onTap = { vm.openDetail(row) },
                         onSwipedToDelete = { pendingDelete = row },
                     )
                 }
@@ -214,8 +228,12 @@ fun HistoryScreen() {
         }
     }
 
-    detail?.let { row ->
-        SolveDetailDialog(row, onDelete = { pendingDelete = row }, onDismiss = { detail = null })
+    detail?.let { open ->
+        SolveDetailDialog(
+            detail = open,
+            onDelete = { pendingDelete = open.row },
+            onDismiss = vm::closeDetail,
+        )
     }
 
     pendingDelete?.let { row ->
@@ -225,9 +243,12 @@ fun HistoryScreen() {
             confirmLabel = stringResource(Res.string.history_delete),
             cancelLabel = stringResource(Res.string.devices_cancel),
             onConfirm = {
+                // vm.delete closes the detail dialog itself when it is
+                // showing the row being deleted – the dialog's lifetime
+                // belongs to whoever owns the data, not to the
+                // confirmation that triggered it.
                 vm.delete(row.id)
                 pendingDelete = null
-                detail = null
             },
             onDismiss = { pendingDelete = null },
         )
@@ -398,34 +419,153 @@ private fun displayDuration(row: SolveRow): String = when {
     else -> formatDuration(row.effectiveMs)
 }
 
+/**
+ * A labelled line in the detail dialog: bold caption, value beside it.
+ * Pulled out because the dialog now has seven of them and the
+ * `Row { Text(bold); Text(value) }` pattern was being retyped each time.
+ */
 @Composable
-private fun SolveDetailDialog(row: SolveRow, onDelete: () -> Unit, onDismiss: () -> Unit) {
+private fun DetailRow(label: String, value: String, monospace: Boolean = false) {
+    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text("$label: ", fontWeight = FontWeight.Black)
+        Text(value, fontFamily = if (monospace) FontFamily.Monospace else FontFamily.Default)
+    }
+}
+
+/**
+ * The five times an Ao5 was computed from, oldest first, with the two
+ * that did not count in brackets.
+ *
+ * Which two those are comes from [Ao5.trimmedIndices] rather than from a
+ * `min`/`max` here, so the brackets can never disagree with the average
+ * printed above them. It matters more than it looks: a DNF is the
+ * *slowest* result rather than a missing one, and two entries tied for
+ * fastest drop only one of themselves — both cases a local min/max would
+ * mark wrongly.
+ *
+ * Rendered as one wrapping [FlowRow] of monospace tokens instead of a
+ * single string. Five times plus brackets overflow the dialog's width on
+ * a narrow phone, and a plain Text would either clip them or break the
+ * line mid-number; this way each time stays whole and the row wraps
+ * between them.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun Ao5TimesRow(encoded: String) {
+    val times = remember(encoded) { Ao5.parseTimes(encoded) }
+    val trimmed = remember(times) { Ao5.trimmedIndices(times) }
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        times.forEachIndexed { index, ms ->
+            val text = ms?.let(::formatDuration) ?: stringResource(Res.string.solve_dnf)
+            val dropped = index in trimmed
+            Text(
+                text = if (dropped) "($text)" else text,
+                fontFamily = FontFamily.Monospace,
+                // The dropped pair is dimmed as well as bracketed. The
+                // brackets carry the meaning for anyone who knows the
+                // convention; the weight difference carries it for
+                // everyone else, and the two agree.
+                color = if (dropped) {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                } else {
+                    MaterialTheme.colorScheme.onSurface
+                },
+            )
+        }
+    }
+}
+
+/**
+ * The turns of the solve, as standard notation.
+ *
+ * The stored track carries a millisecond timestamp per move — that is
+ * what makes a full reconstruction possible later — but the dialog shows
+ * only the sequence and the count. A list of fifty-five timestamps is not
+ * something anyone reads; when the timings are surfaced it should be as
+ * a replay or a graph, and neither belongs in an AlertDialog.
+ *
+ * **Quarter turns are not collapsed into half turns.** A physical `R2`
+ * reaches the app as two `R` events and is stored as two moves with two
+ * timestamps, so that is what is shown. Rendering it as `R2` would read
+ * more like a scramble, but it would also disagree with the "Turns"
+ * count directly above it, and it would throw away the distinction the
+ * reconstruction data exists to preserve — the two halves of a half turn
+ * happen at different moments.
+ *
+ * No scroll or height cap of its own: the dialog's content column
+ * already scrolls, and a second vertical scroller inside it would swallow
+ * the drag before the outer one ever saw it, leaving the rest of the
+ * dialog unreachable on a short screen.
+ */
+@Composable
+private fun MoveSequence(moves: List<TrackedMove>) {
+    val notation = remember(moves) {
+        moves.joinToString(" ") { move -> move.face.name + if (move.cw) "" else "'" }
+    }
+    Text(
+        text = notation,
+        fontFamily = FontFamily.Monospace,
+        style = MaterialTheme.typography.bodySmall,
+    )
+}
+
+@Composable
+private fun SolveDetailDialog(
+    detail: SolveDetail,
+    onDelete: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val row = detail.row
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(displayDuration(row)) },
         text = {
-            Column {
-                Row (horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text(stringResource(Res.string.history_date) + ": ", fontWeight = FontWeight.Black)
-                    Text(formatDate(row.solvedAt))
+            // The dialog's own content scrolls: with the Ao5 window, the
+            // scramble and the move sequence it is now taller than a
+            // small phone in landscape, and AlertDialog does not scroll
+            // its text slot for you.
+            Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                DetailRow(stringResource(Res.string.history_date), formatDate(row.solvedAt))
+
+                // Which cube. Absent entirely for solves recorded before
+                // the column existed rather than shown as "unknown" —
+                // there is no fact to report, and a row saying so would
+                // appear on every historical solve forever.
+                detail.cubeLabel?.let {
+                    DetailRow(stringResource(Res.string.history_cube), it)
                 }
+
                 Text(
                     stringResource(Res.string.history_scramble_label),
                     fontWeight = FontWeight.Black,
                     modifier = Modifier.padding(top = 8.dp),
                 )
                 Text(row.scramble, fontFamily = FontFamily.Monospace)
+
                 row.ao5Ms?.let {
-                    Row (horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Text(stringResource(Res.string.stat_ao5) + ": ", fontWeight = FontWeight.Black)
-                        Text(formatDuration(it))
-                    }
+                    DetailRow(stringResource(Res.string.stat_ao5), formatDuration(it), monospace = true)
                 }
+                // The five constituent times. Shown whenever they exist,
+                // which is not the same condition as the average existing
+                // — a window holding two DNFs has five real times and no
+                // average, and those five are exactly the ones worth
+                // looking at.
+                row.ao5Times?.let { encoded ->
+                    Text(
+                        stringResource(Res.string.history_ao5_times),
+                        fontWeight = FontWeight.Black,
+                        modifier = Modifier.padding(top = 8.dp),
+                    )
+                    Ao5TimesRow(encoded)
+                    Text(
+                        stringResource(Res.string.history_ao5_trimmed_hint),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+
                 row.fluency?.let {
-                    Row {
-                        Text(stringResource(Res.string.stat_fluency) + ":  ", fontWeight = FontWeight.Black)
-                        Text(formatTps(it))
-                    }
+                    DetailRow(stringResource(Res.string.stat_fluency), formatTps(it))
                 }
                 // Total turns recorded during the solve. The 0-guard
                 // hides the row for solves that pre-date the
@@ -434,12 +574,28 @@ private fun SolveDetailDialog(row: SolveRow, onDelete: () -> Unit, onDismiss: ()
                 // data. New solves – including ones with a single
                 // recorded turn – pass the guard normally.
                 if (row.moveCount > 0) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    DetailRow(stringResource(Res.string.history_turns), row.moveCount.toString())
+                }
+
+                // The move sequence, once the track has been read. While
+                // `loaded` is false we render nothing at all rather than
+                // a spinner or a "none recorded" line: the read is a
+                // primary-key lookup that resolves in a frame or two, and
+                // either placeholder would flash.
+                if (detail.loaded) {
+                    Text(
+                        stringResource(Res.string.history_moves),
+                        fontWeight = FontWeight.Black,
+                        modifier = Modifier.padding(top = 8.dp),
+                    )
+                    if (detail.moves.isEmpty()) {
                         Text(
-                            stringResource(Res.string.history_turns) + ": ",
-                            fontWeight = FontWeight.Black,
+                            stringResource(Res.string.history_moves_none),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
-                        Text(row.moveCount.toString())
+                    } else {
+                        MoveSequence(detail.moves)
                     }
                 }
             }

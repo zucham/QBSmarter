@@ -7,6 +7,7 @@ import com.zucham.qbsmarter.data.db.SolveRow
 import com.zucham.qbsmarter.data.db.SolveSort
 import com.zucham.qbsmarter.data.db.SolvesRepository
 import com.zucham.qbsmarter.data.profile.ActiveProfile
+import com.zucham.qbsmarter.domain.reconstruction.TrackedMove
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -37,6 +38,27 @@ data class HistoryWindow(
 )
 
 /**
+ * The expanded view of one solve, as the detail dialog needs it.
+ *
+ * Assembled by [HistoryViewModel.openDetail] rather than derived in the
+ * composable, because two of its three parts are not in the [SolveRow]:
+ * the move track is a blob in a side table, and the cube's name lives in
+ * `cubes`/`cube_names` under a MAC the solve only records as a string.
+ *
+ * [moves] is empty for a solve recorded before move tracks existed, for
+ * one whose cube dropped mid-solve, and — briefly — while the read is in
+ * flight. [loaded] separates the first two from the third so the dialog
+ * can say "no moves recorded" without flashing that message at a user
+ * who is about to get some.
+ */
+data class SolveDetail(
+    val row: SolveRow,
+    val cubeLabel: String?,
+    val moves: List<TrackedMove> = emptyList(),
+    val loaded: Boolean = false,
+)
+
+/**
  * Solve history with progressive loading.
  *
  *   • A single [window: StateFlow<HistoryWindow>] holds whatever has been
@@ -54,7 +76,7 @@ data class HistoryWindow(
 class HistoryViewModel(
     private val solvesRepo: SolvesRepository,
     private val activeProfile: ActiveProfile,
-    cache: AppCache,
+    private val cache: AppCache,
 ) : ViewModel() {
 
     private val _sort = MutableStateFlow(SolveSort.DATE_DESC)
@@ -80,6 +102,19 @@ class HistoryViewModel(
 
     /** Total solve count for the active profile, surfaced to the UI. */
     val totalCount: StateFlow<Long> = cache.solveCount
+
+    /**
+     * The solve whose detail dialog is open, or null when none is.
+     *
+     * Held here rather than in composable state because opening the
+     * dialog reads the database. Keeping it in the ViewModel also means
+     * the dialog survives a configuration change with its moves already
+     * loaded, instead of re-querying on every rotation.
+     */
+    private val _detail = MutableStateFlow<SolveDetail?>(null)
+    val detail: StateFlow<SolveDetail?> = _detail.asStateFlow()
+
+    private var detailJob: Job? = null
 
     private var loadJob: Job? = null
 
@@ -174,6 +209,7 @@ class HistoryViewModel(
     }
 
     fun delete(id: Long) {
+        if (_detail.value?.row?.id == id) closeDetail()
         solvesRepo.delete(id)
         // Optimistically remove from the local list so the row vanishes
         // immediately; refresh() will reconcile if anything else changed.
@@ -189,8 +225,64 @@ class HistoryViewModel(
      */
     fun setPenalty(id: Long, isDnf: Boolean, penaltyMs: Long) {
         solvesRepo.updatePenalty(id, isDnf, penaltyMs)
+        refreshOpenDetail()
         // Refresh – the row may have moved positions if sorted by time.
         refresh()
+    }
+
+    /**
+     * Open the detail dialog for [row].
+     *
+     * Publishes immediately with what the row already carries — time,
+     * scramble, Ao5 — so the dialog appears on the same frame as the tap,
+     * then fills in the move track from the database. The blob is a few
+     * hundred bytes and the read is a primary-key lookup, but it is still
+     * a disk read and it does not belong on the tap's frame.
+     *
+     * The cube label is resolved once, here, from the profile's paired
+     * cubes: a MAC that still matches a paired cube shows that cube's
+     * name, and one that does not shows the MAC itself. Falling back to
+     * the raw address rather than to "unknown" is deliberate — the solve
+     * genuinely was done on an identifiable cube, and a user who has
+     * since forgotten it can still tell two of their cubes apart.
+     */
+    fun openDetail(row: SolveRow) {
+        detailJob?.cancel()
+        _detail.value = SolveDetail(row = row, cubeLabel = cubeLabelFor(row.cubeMac))
+        detailJob = viewModelScope.launch {
+            val moves = withContext(Dispatchers.Default) {
+                solvesRepo.moveTrack(row.id)?.moves.orEmpty()
+            }
+            // Guard against a dialog closed, or a different solve opened,
+            // while the read was in flight.
+            val current = _detail.value
+            if (current?.row?.id == row.id) {
+                _detail.value = current.copy(moves = moves, loaded = true)
+            }
+        }
+    }
+
+    fun closeDetail() {
+        detailJob?.cancel()
+        _detail.value = null
+    }
+
+    /**
+     * Keep the open dialog pointing at the current version of its row.
+     * Called after a penalty edit made from inside the dialog: the stored
+     * Ao5 and its five times are re-derived by the repository, and a
+     * dialog still showing the pre-edit numbers would contradict the list
+     * behind it.
+     */
+    private fun refreshOpenDetail() {
+        val open = _detail.value ?: return
+        val updated = solvesRepo.byId(open.row.id) ?: run { _detail.value = null; return }
+        _detail.value = open.copy(row = updated)
+    }
+
+    private fun cubeLabelFor(mac: String?): String? {
+        if (mac == null) return null
+        return cache.snapshotPairedCubes().firstOrNull { it.mac == mac }?.name ?: mac
     }
 
     /**

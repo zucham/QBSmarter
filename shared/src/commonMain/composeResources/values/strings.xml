@@ -103,6 +103,11 @@
     <string name="history_date">Date</string>
     <string name="history_scramble_label">Scramble:</string>
     <string name="history_turns">Turns</string>
+    <string name="history_cube">Cube</string>
+    <string name="history_ao5_times">Ao5 times</string>
+    <string name="history_ao5_trimmed_hint">Bracketed times were dropped from the average.</string>
+    <string name="history_moves">Moves</string>
+    <string name="history_moves_none">No move data recorded for this solve.</string>
     <string name="history_swipe_hint">Delete a record by swiping it left</string>
     <string name="history_total_one">%1$d solve total</string>
     <string name="history_total_other">%1$d solves total</string>
