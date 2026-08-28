@@ -65,6 +65,7 @@ import androidx.compose.ui.unit.sp
 import com.zucham.qbsmarter.data.db.SolveRow
 import com.zucham.qbsmarter.domain.cube.CubeMove
 import com.zucham.qbsmarter.domain.cube.isApproximatelyIdentity
+import com.zucham.qbsmarter.ui.components.Ao5TimesRow
 import com.zucham.qbsmarter.ui.components.DialogButton
 import com.zucham.qbsmarter.ui.components.DialogButtonEmphasis
 import com.zucham.qbsmarter.ui.components.suppressDrawerGesturesWhileTouched
@@ -78,6 +79,7 @@ import org.jetbrains.compose.resources.stringResource
 import org.koin.compose.viewmodel.koinViewModel
 import qbsmarter.shared.generated.resources.Res
 import qbsmarter.shared.generated.resources.devices_connect
+import qbsmarter.shared.generated.resources.history_ao5_trimmed_hint
 import qbsmarter.shared.generated.resources.solve_connect_cube
 import qbsmarter.shared.generated.resources.solve_dnf
 import qbsmarter.shared.generated.resources.solve_idle
@@ -1370,6 +1372,28 @@ private fun PbDialog(event: PbEvent, onDismiss: () -> Unit) {
                         fontWeight = FontWeight.Bold,
                         fontSize = 22.sp,
                         color = MaterialTheme.colorScheme.primary,
+                    )
+                }
+                // The five solves behind a record average, directly under
+                // whichever line shows it — the headline when the Ao5 is
+                // the only record, the secondary line when the single took
+                // the headline. An Ao5 is the one record whose value says
+                // nothing about how it was earned; five ordinary solves and
+                // one great one plus four near-misses produce the same
+                // number, and the user wants to see which it was.
+                //
+                // Same bracket convention as the History dialog, from the
+                // same composable, so it cannot drift between the two.
+                event.ao5Times?.let { times ->
+                    Ao5TimesRow(
+                        encoded = times,
+                        modifier = Modifier.padding(top = 6.dp),
+                    )
+                    Text(
+                        text = stringResource(Res.string.history_ao5_trimmed_hint),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 2.dp),
                     )
                 }
                 Text(

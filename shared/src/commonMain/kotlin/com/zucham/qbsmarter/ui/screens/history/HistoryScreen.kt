@@ -48,7 +48,7 @@ import androidx.compose.ui.unit.sp
 import com.zucham.qbsmarter.data.db.SolveRow
 import com.zucham.qbsmarter.data.db.SolveSort
 import com.zucham.qbsmarter.domain.reconstruction.TrackedMove
-import com.zucham.qbsmarter.domain.stats.Ao5
+import com.zucham.qbsmarter.ui.components.Ao5TimesRow
 import com.zucham.qbsmarter.ui.components.ConfirmationDialog
 import com.zucham.qbsmarter.ui.components.DialogButton
 import com.zucham.qbsmarter.ui.components.DialogButtonEmphasis
@@ -80,7 +80,6 @@ import qbsmarter.shared.generated.resources.history_swipe_hint
 import qbsmarter.shared.generated.resources.history_total_one
 import qbsmarter.shared.generated.resources.history_total_other
 import qbsmarter.shared.generated.resources.history_turns
-import qbsmarter.shared.generated.resources.solve_dnf
 import qbsmarter.shared.generated.resources.stat_ao5
 import qbsmarter.shared.generated.resources.stat_fluency
 
@@ -429,49 +428,6 @@ private fun DetailRow(label: String, value: String, monospace: Boolean = false) 
     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         Text("$label: ", fontWeight = FontWeight.Black)
         Text(value, fontFamily = if (monospace) FontFamily.Monospace else FontFamily.Default)
-    }
-}
-
-/**
- * The five times an Ao5 was computed from, oldest first, with the two
- * that did not count in brackets.
- *
- * Which two those are comes from [Ao5.trimmedIndices] rather than from a
- * `min`/`max` here, so the brackets can never disagree with the average
- * printed above them. It matters more than it looks: a DNF is the
- * *slowest* result rather than a missing one, and two entries tied for
- * fastest drop only one of themselves — both cases a local min/max would
- * mark wrongly.
- *
- * Rendered as one wrapping [FlowRow] of monospace tokens instead of a
- * single string. Five times plus brackets overflow the dialog's width on
- * a narrow phone, and a plain Text would either clip them or break the
- * line mid-number; this way each time stays whole and the row wraps
- * between them.
- */
-@OptIn(ExperimentalLayoutApi::class)
-@Composable
-private fun Ao5TimesRow(encoded: String) {
-    val times = remember(encoded) { Ao5.parseTimes(encoded) }
-    val trimmed = remember(times) { Ao5.trimmedIndices(times) }
-    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        times.forEachIndexed { index, ms ->
-            val text = ms?.let(::formatDuration) ?: stringResource(Res.string.solve_dnf)
-            val dropped = index in trimmed
-            Text(
-                text = if (dropped) "($text)" else text,
-                fontFamily = FontFamily.Monospace,
-                // The dropped pair is dimmed as well as bracketed. The
-                // brackets carry the meaning for anyone who knows the
-                // convention; the weight difference carries it for
-                // everyone else, and the two agree.
-                color = if (dropped) {
-                    MaterialTheme.colorScheme.onSurfaceVariant
-                } else {
-                    MaterialTheme.colorScheme.onSurface
-                },
-            )
-        }
     }
 }
 

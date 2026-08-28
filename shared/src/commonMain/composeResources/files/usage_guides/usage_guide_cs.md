@@ -102,7 +102,8 @@ dokončené složení a osobní rekord, průměr a nejlepší Ao5 pro celý prof
 Celkový počet složení je uveden vedle průměru.
 
 Když složení překoná rekord - nejrychlejší čas, nejlepší Ao5, nebo obojí
-najednou - objeví se gratulační dialog. Pokud takové složení dodatečně označíte
+najednou - objeví se gratulační dialog. U nového nejlepšího Ao5 vypíše i pětici
+časů, ze kterých vznikl, se dvěma nezapočítanými v závorkách. Pokud takové složení dodatečně označíte
 jako `+2` nebo `DNF` a rekord tím přestane platit, dialog se odvolá.
 
 ### Používání časovače
@@ -168,7 +169,10 @@ Každý záznam v seznamu obsahuje:
 - Průměr z posledních pěti složení (Ao5) a za ním pětici časů, ze kterých byl
   spočítán, od nejstaršího. Nejrychlejší a nejpomalejší z nich jsou uvedeny
   **v závorkách** - tyto dva se do průměru nepočítají, počítají se pouze
-  prostřední tři. Případné DNF se počítá jako nejpomalejší výsledek.
+  prostřední tři. Případné DNF se počítá jako nejpomalejší výsledek přesně tak,
+  jak to definují pravidla WCA - neplatné složení je tedy stále jedním z pěti
+  pokusů i v průměrech, které po něm následují. Pokud jsou v jedné pětici dvě
+  a více DNF, průměr neexistuje.
 - Plynulost (TPS - turns per second, počet otoček za vteřinu).
 - Počet otáček (turns) provedených během složení.
 - Samotné otáčky v standardní notaci.

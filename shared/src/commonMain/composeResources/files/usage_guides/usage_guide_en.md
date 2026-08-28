@@ -102,7 +102,8 @@ the solve you just did, and your personal best, mean and best Ao5 for the profil
 The total number of solves is shown next to the mean.
 
 When a solve sets a new record - your fastest time, your best Ao5, or both at
-once - a celebration dialog appears. Marking that solve `+2` or `DNF` afterwards
+once - a celebration dialog appears. For a new best Ao5 it also lists the five
+times behind it, with the two that did not count in brackets. Marking that solve `+2` or `DNF` afterwards
 withdraws the record if the penalty means it no longer stands.
 
 ### Using the timer
@@ -168,7 +169,10 @@ Each record in the list contains:
 - The Average of 5 (Ao5) at that moment, followed by the five times it was
   calculated from, oldest first. The fastest and the slowest of the five are
   shown **in brackets** - those two do not count toward the average, only the
-  middle three do. A DNF among them counts as the slowest result.
+  middle three do. A DNF among them counts as the slowest result, exactly as
+  the WCA regulations define it, so a failed solve is still one of the five
+  attempts in the averages that follow it. Two or more DNFs in the same five
+  and there is no average at all.
 - Fluency (TPS - turns per second) at that moment.
 - The number of turns performed during the solve.
 - The turns themselves, in standard notation.

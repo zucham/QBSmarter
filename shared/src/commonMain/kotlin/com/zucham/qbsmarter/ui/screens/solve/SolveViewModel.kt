@@ -844,7 +844,11 @@ class SolveViewModel(
         // Effective time at this moment equals durationMs (no penalty
         // applied yet). The penalty buttons re-run this whenever the
         // flags change.
-        raiseRecordEvent(currentAo5Ms = solvesRepo.byId(insertedId)?.ao5Ms)
+        val insertedRow = solvesRepo.byId(insertedId)
+        raiseRecordEvent(
+            currentAo5Ms = insertedRow?.ao5Ms,
+            currentAo5Times = insertedRow?.ao5Times,
+        )
     }
 
     /**
@@ -869,7 +873,7 @@ class SolveViewModel(
      * repository has just re-derived the value, and re-reading it is one
      * indexed row fetch on a path the user is watching.
      */
-    private fun raiseRecordEvent(currentAo5Ms: Long?) {
+    private fun raiseRecordEvent(currentAo5Ms: Long?, currentAo5Times: String?) {
         val info = _lastSolveInfo.value ?: return
         // Spelled out rather than chained through takeIf/let. This is the
         // code that decides whether the trophy shows, and both rules
@@ -889,7 +893,14 @@ class SolveViewModel(
             } else {
                 null
             }
-        val event = if (single == null && ao5 == null) null else PbEvent(single, ao5)
+        val event = if (single == null && ao5 == null) {
+            null
+        } else {
+            // The times ride along only when the Ao5 is actually the
+            // record. On a single-only record they would be five times
+            // behind an average that did not win anything.
+            PbEvent(single, ao5, if (ao5 != null) currentAo5Times else null)
+        }
         // Assigning an equal value would be a no-op for observers, but
         // assigning a *different* one re-shows a dialog the user may have
         // just dismissed. Only write when something actually changed.
@@ -1003,7 +1014,11 @@ class SolveViewModel(
      */
     private fun recomputePbAfterPenalty() {
         val info = _lastSolveInfo.value ?: return
-        raiseRecordEvent(currentAo5Ms = if (info.isDnf) null else solvesRepo.byId(info.id)?.ao5Ms)
+        // Re-read rather than remember: the repository has just re-derived
+        // this row's average AND the five times behind it, and a penalty
+        // is exactly the edit that changes which two of them are trimmed.
+        val row = if (info.isDnf) null else solvesRepo.byId(info.id)
+        raiseRecordEvent(currentAo5Ms = row?.ao5Ms, currentAo5Times = row?.ao5Times)
     }
 
     /**
@@ -1123,4 +1138,13 @@ data class PbEvent(
     val singleMs: Long? = null,
     /** New best Ao5 (ms), or null if the Ao5 record stood. */
     val ao5Ms: Long? = null,
+    /**
+     * The five times behind [ao5Ms], in the encoding
+     * [com.zucham.qbsmarter.domain.stats.Ao5] defines. Carried on the
+     * event rather than looked up by the dialog: the record is a fact
+     * about one specific window, and by the time the user dismisses the
+     * dialog the profile may already have more solves in it. Null
+     * whenever [ao5Ms] is.
+     */
+    val ao5Times: String? = null,
 )

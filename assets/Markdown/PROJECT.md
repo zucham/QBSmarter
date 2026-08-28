@@ -1361,6 +1361,19 @@ created_at                                           name (advertised)         s
                                                                                is_dnf
                                                                                penalty_ms
                                                                                move_count
+                                                                               cube_mac  (no FK)
+                                                                                  │
+                            ┌─────────────────────────────────────────────────────┴──────────┐
+                            │                                                                │
+                    solve_moves                                                        solve_gyro
+                    ───────────                                                        ──────────
+                    solve_id PK ─→ solves (CASCADE)                     solve_id PK ─→ solves (CASCADE)
+                    format                                              user_id     ─→ users  (CASCADE)
+                    move_count                                          solved_at   ┐ denormalised
+                    payload BLOB                                        format      │ for pruning
+                                                                        sample_count│
+                                                                        pinned      ┘
+                                                                        payload BLOB
 ```
 
 - `app_state` is a single-row pattern: PK is constant 0 (`CHECK (id = 0)`), so it can hold at most one row. `INSERT OR IGNORE` bootstraps; `UPDATE` mutates.
@@ -1370,7 +1383,7 @@ created_at                                           name (advertised)         s
 - `cubes.upsert` sets `name = COALESCE(excluded.name, name)`: take the newly-advertised value whenever the cube reports one, keep the last one we saw when it doesn't. This clause used to be the other way round (fill-only, `COALESCE(name, excluded.name)`) because user renames lived in this column and every reconnect would otherwise have stamped the manufacturer's name back over them. With renames moved out to `cube_names`, the clause went back to meaning what it says.
 - `cubes.vendor` is the persisted form of `CubeVendor` (`'gan'` / `'moyu'`), `NOT NULL DEFAULT 'gan'`. Stamped by the orchestrator via `updateVendor(mac, vendor)` right after service-UUID-based detection, well before the INFO round-trip lands. The `'gan'` default covers the brief pre-detection window for newly-paired rows and any pre-feature exports (which deserialise as `vendor = "gan"` by default).
 - **Foreign keys are enforced.** `DriverFactory` (Android) passes an `AndroidSqliteDriver.Callback` whose `onConfigure` calls `setForeignKeyConstraintsEnabled(true)`. Until v1.3.0 nothing did, so *every* `ON DELETE CASCADE` in this schema was inert and `deleteProfile` silently orphaned the profile's cubes, solves and settings. See *Foreign keys* below.
-- `solves` indexes: `(user_id, solved_at DESC)`, `(user_id, is_dnf, (duration_ms + penalty_ms))`, `(user_id, ao5_ms) WHERE ao5_ms IS NOT NULL`. See *Record queries and the ranking index*.
+- `solves` indexes: `(user_id, solved_at DESC)`, `(user_id, is_dnf, (duration_ms + penalty_ms))`, `(user_id, ao5_ms) WHERE ao5_ms IS NOT NULL`, `(user_id, cube_mac, solved_at DESC)`. See *Record queries and the ranking index*.
 - `solves.bestDuration` returns `MIN(duration_ms + penalty_ms)` skipping DNFs. Aliased `AS best` so the generated row class has a stable Kotlin property name.
 - `solves.ao5_ms` / `ao5_times` are **derived** columns, maintained by `Ao5` on every path that can change them (insert, penalty edit, delete, import rebuild). `ao5_times` holds the five effective times oldest-first with `D` for a DNF. They are nullable independently: a window of five holding two DNFs has times but no average.
 - `solves.cube_mac` records which physical cube the solve was done on. **No FK** — forgetting a cube must neither delete its solves nor be refused, and the MAC outlives the `cubes` row, the same reasoning `cube_names` uses.
@@ -1456,7 +1469,6 @@ An Ao5 belongs to a solve but is a fact about its *neighbours*, which is what ma
 The one deliberate departure is `MeanStat`, which excludes DNFs rather than returning DNF. WCA 9f11 makes any DNF poison a mean-of-3, but a session mean over a hundred solves that reads "DNF" because one attempt failed is useless; this follows the practice-timer convention instead.
 
 Every path that can invalidate a stored value re-derives it through that one object:
-
 
 | event | what is repaired |
 |---|---|
