@@ -7,6 +7,7 @@ import com.zucham.qbsmarter.domain.driver.gan.GanGen2Protocol
 import com.zucham.qbsmarter.domain.driver.gan.GanGen3Protocol
 import com.zucham.qbsmarter.domain.driver.gan.GanGen4Protocol
 import com.zucham.qbsmarter.domain.driver.gan.ganEncryptorFor
+import com.zucham.qbsmarter.domain.driver.gocube.GoCubeProtocol
 import com.zucham.qbsmarter.domain.driver.moyu.MoyuMhcProtocol
 import com.zucham.qbsmarter.domain.driver.moyu.MoyuWcuProtocol
 import com.zucham.qbsmarter.domain.driver.moyu.moyuWcuEncryptorFor
@@ -164,6 +165,29 @@ object CubeProtocolRegistry {
             namePrefixes = listOf("QY-QYSC", "XMD-TornadoV4-i"),
             createEncryptor = { qiyiEncryptor() },
             createProtocol = { QiyiProtocol(it) },
+        ),
+
+        // -- GoCube / Rubik's --------------------------------------------
+        // One protocol, two brands. The service is Nordic UART but with
+        // GoCube's own UUID tail (…ca9e), so it does not collide with
+        // GAN Gen2's Nordic UART service (…4179).
+        CubeProtocolSpec(
+            id = "gocube",
+            vendor = CubeVendor.GOCUBE,
+            serviceUuid = "6e400001-b5a3-f393-e0a9-e50e24dcca9e",
+            commandCharUuid = "6e400002-b5a3-f393-e0a9-e50e24dcca9e",
+            stateCharUuid = "6e400003-b5a3-f393-e0a9-e50e24dcca9e",
+            namePrefixes = listOf("GoCube"),
+            createProtocol = { GoCubeProtocol(CubeVendor.GOCUBE, it) },
+        ),
+        CubeProtocolSpec(
+            id = "rubiks-connected",
+            vendor = CubeVendor.RUBIKS,
+            serviceUuid = "6e400001-b5a3-f393-e0a9-e50e24dcca9e",
+            commandCharUuid = "6e400002-b5a3-f393-e0a9-e50e24dcca9e",
+            stateCharUuid = "6e400003-b5a3-f393-e0a9-e50e24dcca9e",
+            namePrefixes = listOf("Rubiks", "Rubik"),
+            createProtocol = { GoCubeProtocol(CubeVendor.RUBIKS, it) },
         ),
 
         // -- GAN Gen1 ----------------------------------------------------

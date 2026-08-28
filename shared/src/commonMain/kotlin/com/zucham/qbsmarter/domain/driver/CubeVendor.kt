@@ -17,7 +17,9 @@ package com.zucham.qbsmarter.domain.driver
 enum class CubeVendor(val key: String) {
     GAN("gan"),
     MOYU("moyu"),
-    QIYI("qiyi");
+    QIYI("qiyi"),
+    GOCUBE("gocube"),
+    RUBIKS("rubiks");
 
     companion object {
         /**

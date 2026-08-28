@@ -70,6 +70,8 @@
     <string name="device_vendor_gan">GAN</string>
     <string name="device_vendor_moyu">MoYu</string>
     <string name="device_vendor_qiyi">QiYi</string>
+    <string name="device_vendor_gocube">GoCube</string>
+    <string name="device_vendor_rubiks">Rubik\'s</string>
     <string name="devices_no_permissions">Bluetooth permissions are required to scan for cubes and pair them.</string>
     <string name="devices_bt_disabled">Bluetooth is turned off. Enable it to scan for cubes and pair them.</string>
     <string name="devices_bt_enable">Enable Bluetooth</string>
