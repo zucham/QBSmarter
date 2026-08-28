@@ -32,6 +32,9 @@
     <string name="solve_pb_title">Nový rekord!</string>
     <string name="solve_pb_message">Právě jste překonali svůj osobní rekord pro tento profil!</string>
     <string name="solve_pb_dismiss">Hurá!</string>
+    <string name="solve_pb_ao5_title">Nejlepší Ao5!</string>
+    <string name="solve_pb_ao5_message">Právě jste zlepšili svůj nejlepší průměr z 5 pro tento profil!</string>
+    <string name="solve_pb_both_message">Nový nejlepší čas i nejlepší průměr z 5, a to v jednom složení!</string>
 
     <string name="stat_best_ao5">Nejlepší Ao5</string>
     <string name="stat_best">Osobní rekord</string>

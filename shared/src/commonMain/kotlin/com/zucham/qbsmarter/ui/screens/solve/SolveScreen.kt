@@ -71,24 +71,27 @@ import com.zucham.qbsmarter.ui.components.suppressDrawerGesturesWhileTouched
 import com.zucham.qbsmarter.ui.screens.solve.stats.SolveSession
 import com.zucham.qbsmarter.ui.screens.solve.stats.SolveStat
 import com.zucham.qbsmarter.ui.screens.solve.stats.StatRegistry
-import com.zucham.qbsmarter.util.formatDuration
 import com.zucham.qbsmarter.ui.theme.ConnectionDotSize
 import com.zucham.qbsmarter.ui.theme.StatusColors
+import com.zucham.qbsmarter.util.formatDuration
 import org.jetbrains.compose.resources.stringResource
 import org.koin.compose.viewmodel.koinViewModel
 import qbsmarter.shared.generated.resources.Res
 import qbsmarter.shared.generated.resources.devices_connect
+import qbsmarter.shared.generated.resources.solve_connect_cube
+import qbsmarter.shared.generated.resources.solve_dnf
 import qbsmarter.shared.generated.resources.solve_idle
 import qbsmarter.shared.generated.resources.solve_new_scramble
 import qbsmarter.shared.generated.resources.solve_no_cube
-import qbsmarter.shared.generated.resources.solve_connect_cube
-import qbsmarter.shared.generated.resources.solve_dnf
+import qbsmarter.shared.generated.resources.solve_pb_ao5_message
+import qbsmarter.shared.generated.resources.solve_pb_ao5_title
+import qbsmarter.shared.generated.resources.solve_pb_both_message
 import qbsmarter.shared.generated.resources.solve_pb_dismiss
 import qbsmarter.shared.generated.resources.solve_pb_message
 import qbsmarter.shared.generated.resources.solve_pb_title
 import qbsmarter.shared.generated.resources.solve_plus2
-import qbsmarter.shared.generated.resources.solve_ready
 import qbsmarter.shared.generated.resources.solve_quick_overview
+import qbsmarter.shared.generated.resources.solve_ready
 import qbsmarter.shared.generated.resources.solve_reset_orientation
 import qbsmarter.shared.generated.resources.solve_reset_state
 import qbsmarter.shared.generated.resources.solve_running
@@ -100,6 +103,8 @@ import qbsmarter.shared.generated.resources.solve_tip_uu_suffix
 import qbsmarter.shared.generated.resources.solve_toggle_gyro
 import qbsmarter.shared.generated.resources.solve_toggle_gyro_off
 import qbsmarter.shared.generated.resources.solve_toggle_gyro_on
+import qbsmarter.shared.generated.resources.stat_best
+import qbsmarter.shared.generated.resources.stat_best_ao5
 
 /**
  * Solve screen layout (top → bottom):
@@ -333,8 +338,8 @@ fun SolveScreen(onNavigateToDevices: () -> Unit = {}) {
     // SOLVED phase whenever finishSolve() detected a new personal best.
     // The dialog is the explicit dismissal mechanism – outside-tap and
     // the "Hooray!" button both clear the event.
-    newPbEvent?.let { effectiveMs ->
-        PbDialog(durationMs = effectiveMs, onDismiss = vm::dismissPbEvent)
+    newPbEvent?.let { event ->
+        PbDialog(event = event, onDismiss = vm::dismissPbEvent)
     }
 }
 
@@ -1294,40 +1299,89 @@ private fun StatTile(label: String, value: String, labelSuffix: String? = null) 
 }
 
 /**
- * "New personal best!" celebration dialog. Shows the freshly-recorded
- * duration in mm:ss.cc, a celebratory message, and a single "Hooray!"
+ * "New personal best!" celebration dialog. Shows the record (or records)
+ * just set in mm:ss.cc, a celebratory message, and a single "Hooray!"
  * dismiss button – playful tone deliberately, this is the moment the
  * user has been chasing.
+ *
+ * One dialog covers a best single, a best Ao5, or both at once, rather
+ * than three dialogs or a queue of two. A solve that takes both records
+ * is the *best* case, and the user should not have to dismiss one
+ * celebration to discover the other.
+ *
+ * The hierarchy carries the meaning when both land: the single is the
+ * headline number, the Ao5 sits under it at body size with its own
+ * label. When only the Ao5 is a record it becomes the headline itself —
+ * the layout follows what was achieved rather than a fixed slot per
+ * statistic.
  *
  * The dialog is dismissable via the button, an outside-tap, or the system
  * back button. All three route through [onDismiss] which clears the VM's
  * pb-event flow back to null.
  */
 @Composable
-private fun PbDialog(durationMs: Long, onDismiss: () -> Unit) {
+private fun PbDialog(event: PbEvent, onDismiss: () -> Unit) {
+    // Headline = the single if it is a record, otherwise the Ao5. The
+    // secondary line is whichever record is left over, and is absent when
+    // only one was set.
+    val headlineMs = event.singleMs ?: event.ao5Ms
+    val headlineLabel =
+        if (event.singleMs != null) Res.string.stat_best else Res.string.stat_best_ao5
+    val secondaryMs = if (event.singleMs != null) event.ao5Ms else null
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {
             Text(
-                stringResource(Res.string.solve_pb_title),
+                stringResource(
+                    if (event.singleMs != null) Res.string.solve_pb_title
+                    else Res.string.solve_pb_ao5_title
+                ),
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.primary,
             )
         },
         text = {
             Column {
+                Text(
+                    text = stringResource(headlineLabel),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
                 // The new time, big and monospaced – same vocabulary as
                 // the running timer so the user immediately recognises
                 // "this is your time".
                 Text(
-                    text = formatDuration(durationMs),
+                    text = headlineMs?.let(::formatDuration).orEmpty(),
                     fontFamily = FontFamily.Monospace,
                     fontWeight = FontWeight.Bold,
                     fontSize = 36.sp,
                     color = MaterialTheme.colorScheme.primary,
                 )
+                if (secondaryMs != null) {
+                    Text(
+                        text = stringResource(Res.string.stat_best_ao5),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 10.dp),
+                    )
+                    Text(
+                        text = formatDuration(secondaryMs),
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 22.sp,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
                 Text(
-                    text = stringResource(Res.string.solve_pb_message),
+                    text = stringResource(
+                        if (event.singleMs != null && event.ao5Ms != null) {
+                            Res.string.solve_pb_both_message
+                        } else if (event.singleMs != null) {
+                            Res.string.solve_pb_message
+                        } else {
+                            Res.string.solve_pb_ao5_message
+                        }
+                    ),
                     style = MaterialTheme.typography.bodyMedium,
                     modifier = Modifier.padding(top = 8.dp),
                 )

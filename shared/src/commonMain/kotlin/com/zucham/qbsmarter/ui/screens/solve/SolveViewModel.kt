@@ -167,11 +167,10 @@ class SolveViewModel(
     val totalSolveCount: StateFlow<Long> = cache.solveCount
 
     /**
-     * One-shot "new personal best" notification for the Solve screen.
-     * Holds the effective duration (ms) of the just-finished
-     * solve when it beat the previous best for the active profile;
-     * cleared back to null by [dismissPbEvent] when the user dismisses
-     * the celebration dialog.
+     * One-shot "new personal record" notification for the Solve screen.
+     * Holds whichever records the just-finished solve took — best single,
+     * best Ao5, or both — and is cleared back to null by [dismissPbEvent]
+     * when the user dismisses the celebration dialog.
      *
      * Why a `MutableStateFlow<Long?>` instead of a `Channel`/`SharedFlow`:
      * the screen observes via `collectAsState` and re-displays the dialog
@@ -179,8 +178,8 @@ class SolveViewModel(
      * change) until the user explicitly dismisses. A Channel/SharedFlow
      * would deliver once and lose the "still showing" state on reconfig.
      */
-    private val _newPbEvent = MutableStateFlow<Long?>(null)
-    val newPbEvent: StateFlow<Long?> = _newPbEvent.asStateFlow()
+    private val _newPbEvent = MutableStateFlow<PbEvent?>(null)
+    val newPbEvent: StateFlow<PbEvent?> = _newPbEvent.asStateFlow()
 
     /**
      * Snapshot of the just-finished solve. Holds the row id and
@@ -806,6 +805,7 @@ class SolveViewModel(
         // this path — measured at hundredths of a millisecond against a
         // hundred thousand solves.
         val previousBest = cache.bestDurationMs.value ?: solvesRepo.bestDuration(uid)
+        val previousBestAo5 = cache.bestAo5Ms.value ?: solvesRepo.bestAo5(uid)
 
         // The Ao5 is no longer computed here. It is derived inside the
         // insert transaction from the rows the database holds, which is
@@ -836,16 +836,64 @@ class SolveViewModel(
             penaltyMs = 0L,
             isDnf = false,
             previousBest = previousBest,
+            previousBestAo5 = previousBestAo5,
         )
 
-        // PB only fires when the effective time (durationMs +
-        // penaltyMs, excluding DNFs) strictly beats the previous best.
+        // Both records are judged the same way: strictly beat the value
+        // captured before the insert, and never while the solve is a DNF.
         // Effective time at this moment equals durationMs (no penalty
-        // applied yet), and the solve isn't DNF. The penalty buttons
-        // below recompute this whenever flags change.
-        if (previousBest != null && durationMs < previousBest) {
-            _newPbEvent.value = durationMs
-        }
+        // applied yet). The penalty buttons re-run this whenever the
+        // flags change.
+        raiseRecordEvent(currentAo5Ms = solvesRepo.byId(insertedId)?.ao5Ms)
+    }
+
+    /**
+     * Raise, amend or withdraw the record celebration for the
+     * just-finished solve.
+     *
+     * One function for both the initial decision and every re-decision
+     * after a penalty edit, because they are the same decision: compare
+     * the solve's *current* effective time and *current* Ao5 against the
+     * baselines captured before it was inserted. Writing the two
+     * separately is how a "+2 applied, but the trophy stayed up" bug gets
+     * in — the original code had a dedicated recompute path precisely
+     * because the two had drifted apart.
+     *
+     * A record requires a previous value to beat. The very first solve of
+     * a profile is not a personal best and the fifth solve's first-ever
+     * Ao5 is not a record — there is nothing to have improved on, and a
+     * celebration for clearing an empty bar reads as a bug.
+     *
+     * [currentAo5Ms] is passed in rather than read here so the caller
+     * controls when the database is touched: after a penalty edit the
+     * repository has just re-derived the value, and re-reading it is one
+     * indexed row fetch on a path the user is watching.
+     */
+    private fun raiseRecordEvent(currentAo5Ms: Long?) {
+        val info = _lastSolveInfo.value ?: return
+        // Spelled out rather than chained through takeIf/let. This is the
+        // code that decides whether the trophy shows, and both rules
+        // should be readable in one glance: beat a value that existed,
+        // and don't be a DNF.
+        val previousSingle = info.previousBest
+        val single =
+            if (previousSingle != null && !info.isDnf && info.effectiveMs < previousSingle) {
+                info.effectiveMs
+            } else {
+                null
+            }
+        val previousAo5 = info.previousBestAo5
+        val ao5 =
+            if (previousAo5 != null && currentAo5Ms != null && currentAo5Ms < previousAo5) {
+                currentAo5Ms
+            } else {
+                null
+            }
+        val event = if (single == null && ao5 == null) null else PbEvent(single, ao5)
+        // Assigning an equal value would be a no-op for observers, but
+        // assigning a *different* one re-shows a dialog the user may have
+        // just dismissed. Only write when something actually changed.
+        if (_newPbEvent.value != event) _newPbEvent.value = event
     }
 
     /**
@@ -940,27 +988,22 @@ class SolveViewModel(
     }
 
     /**
-     * Re-evaluate whether the just-finished solve should still be a PB
-     * after a penalty change. Logic:
-     *  - DNF → never a PB.
-     *  - Otherwise compare effective time against the captured
-     *    `previousBest`.
-     *  - If now a PB and we don't already have an event raised, raise it.
-     *  - If no longer a PB but we had raised an event, clear it.
+     * Re-evaluate both records after a penalty change.
+     *
+     * A +2 or a DNF moves the solve's own effective time *and* its Ao5 —
+     * and the Ao5 of the four solves after it, which the repository has
+     * already re-derived by the time this runs. So the Ao5 is re-read
+     * from the database rather than remembered: the value that decides
+     * the record is the one now stored against the row.
+     *
+     * A DNF zeroes both. It cannot be a best single, and its Ao5 window
+     * loses a time (or the average entirely, if a second DNF is in
+     * range), so whatever the stored value is now, it is not an
+     * improvement this solve can claim.
      */
     private fun recomputePbAfterPenalty() {
         val info = _lastSolveInfo.value ?: return
-        val previousBest = info.previousBest
-        val effective = info.durationMs + info.penaltyMs
-        val shouldBePb = !info.isDnf && previousBest != null && effective < previousBest
-        when {
-            shouldBePb && _newPbEvent.value == null -> _newPbEvent.value = effective
-            !shouldBePb && _newPbEvent.value != null -> _newPbEvent.value = null
-            // If the value is already correct (e.g. PB still valid with
-            // updated time) we leave it – re-emitting wouldn't change
-            // observers' state.
-            shouldBePb && _newPbEvent.value != effective -> _newPbEvent.value = effective
-        }
+        raiseRecordEvent(currentAo5Ms = if (info.isDnf) null else solvesRepo.byId(info.id)?.ao5Ms)
     }
 
     /**
@@ -1036,6 +1079,17 @@ data class LastSolveInfo(
     val penaltyMs: Long,
     val isDnf: Boolean,
     val previousBest: Long?,
+    /**
+     * The profile's best Ao5 *before* this solve landed, so a later +2 or
+     * DNF can be re-judged against the same baseline the original
+     * decision used.
+     *
+     * Captured rather than re-read for the same reason as
+     * [previousBest]: once the row is in the database its own Ao5 is part
+     * of `MIN(ao5_ms)`, and comparing against that would be comparing the
+     * solve with itself.
+     */
+    val previousBestAo5: Long?,
 ) {
     val effectiveMs: Long get() = durationMs + penaltyMs
 }
@@ -1053,3 +1107,20 @@ data class CubeConnectionSummary(
     /** True only if we know the cube has gyro support. False if we know it doesn't. */
     val gyroSupported: Boolean? get() = cube?.gyroSupported
 }
+
+/**
+ * A record the just-finished solve set, as the celebration dialog needs
+ * it. Both fields can be populated at once — a fast enough solve can take
+ * the single record and drag the rolling Ao5 under its record in the same
+ * moment — and showing one dialog that says so beats picking a winner and
+ * silently swallowing the other achievement.
+ *
+ * At least one field is non-null whenever an instance exists; an event
+ * with neither is not raised.
+ */
+data class PbEvent(
+    /** New best single (effective ms), or null if the single record stood. */
+    val singleMs: Long? = null,
+    /** New best Ao5 (ms), or null if the Ao5 record stood. */
+    val ao5Ms: Long? = null,
+)

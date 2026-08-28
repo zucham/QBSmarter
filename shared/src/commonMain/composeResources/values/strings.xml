@@ -40,6 +40,9 @@
     <string name="solve_pb_title">New personal best!</string>
     <string name="solve_pb_message">You just set a new personal record for this profile!</string>
     <string name="solve_pb_dismiss">Hooray!</string>
+    <string name="solve_pb_ao5_title">New best Ao5!</string>
+    <string name="solve_pb_ao5_message">Your best average of 5 for this profile just improved!</string>
+    <string name="solve_pb_both_message">A new best time and a new best average of 5, in one solve!</string>
 
     <string name="stat_best">Personal best</string>
     <string name="stat_best_ao5">Best Ao5</string>

@@ -101,6 +101,10 @@ Below the action row is a card with the scramble and a **`New`** button for gene
 the solve you just did, and your personal best, mean and best Ao5 for the profile.
 The total number of solves is shown next to the mean.
 
+When a solve sets a new record - your fastest time, your best Ao5, or both at
+once - a celebration dialog appears. Marking that solve `+2` or `DNF` afterwards
+withdraws the record if the penalty means it no longer stands.
+
 ### Using the timer
 
 The main purpose of the app is automatic time measurement during solving, scramble generation, and saving the solve history. Here is a description of the timer's phases:

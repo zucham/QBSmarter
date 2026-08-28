@@ -101,6 +101,10 @@ Pod akční řadou se nachází karta se zamícháním (scramblem) a tlačítkem
 dokončené složení a osobní rekord, průměr a nejlepší Ao5 pro celý profil.
 Celkový počet složení je uveden vedle průměru.
 
+Když složení překoná rekord - nejrychlejší čas, nejlepší Ao5, nebo obojí
+najednou - objeví se gratulační dialog. Pokud takové složení dodatečně označíte
+jako `+2` nebo `DNF` a rekord tím přestane platit, dialog se odvolá.
+
 ### Používání časovače
 
 Hlavním účelem aplikace je automatické měření času během skládání, generování scramblů a ukládání historie skládání. Zde je popis fází časovače:

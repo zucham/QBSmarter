@@ -1520,6 +1520,20 @@ all-time counterpart. A suffix rather than a second line because the grid gives
 every tile the same height and a wrapped value would make its whole row taller
 than the one above.
 
+**Record celebration.** `newPbEvent` now carries a `PbEvent(singleMs, ao5Ms)`
+instead of a bare `Long`, and one dialog covers a best single, a best Ao5, or
+both at once — a solve that takes both is the best case, and the user should not
+have to dismiss one celebration to find the other. The layout follows what was
+achieved: whichever record exists is the headline, the other sits beneath it.
+
+Both records are decided in one place, `raiseRecordEvent`, called on insert
+*and* after every penalty edit. Splitting the initial decision from the
+re-decision is how a "+2 applied, trophy stayed up" bug gets in — the code had a
+separate recompute path before precisely because the two had drifted. A record
+requires a previous value to beat, so a profile's first solve is not a personal
+best and its fifth solve's first-ever Ao5 is not a record; celebrating an empty
+bar reads as a bug.
+
 ### SQLDelight single-column queries
 
 The generated shape of a one-column `SELECT` depends on whether that column can
