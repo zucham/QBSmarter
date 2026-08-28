@@ -46,8 +46,8 @@ android {
         // API 31+. See AndroidManifest.xml for the declarations.
         minSdk = libs.versions.android.minSdk.get().toInt()
         targetSdkVersion(rootProject.extra["defaultTargetSdkVersion"] as Int)
-        versionCode = 14
-        versionName = "1.4.1"
+        versionCode = 15
+        versionName = "1.4.2"
     }
     // -- Release signing --------------------------------------------------
     //
