@@ -501,7 +501,7 @@ The Solve screen uses `catchUpVisualTo` because the move queue is stopped while 
 - Manual "Reset orientation" button slerp-animates back to identity
 - `resetImmediately()` drops the drag offset with no animation and needs no scope. It is the fallback used on disconnect, because a link can just as easily drop while the user is on Devices with the cube view disposed (and therefore with no bound scope to animate in). A `resetGeneration` counter makes an in-flight slerp go quiet instead of painting over the forced reset for the rest of its tween.
 
-The Solve screen hides the Reset Orientation button when the orbit is already approximately at identity (`isApproximatelyIdentity`, ~1.8° tolerance) **and** the gyro is off – with the gyro running the button is the only way back to a centred pose, so it stays up.
+The Solve screen hides the Reset Orientation button when the orbit is already approximately at identity (`isApproximatelyIdentity`, ~1.8° tolerance) **and** the gyro is not live – with the gyro running the button is the only way back to a centred pose, so it stays up. "Live" includes the connection: the gyro term is `gyroEnabled && connection.isConnected`.
 
 #### Gyro
 
@@ -521,7 +521,9 @@ The Solve screen hides the Reset Orientation button when the orbit is already ap
 
 **Reset semantics.** Switching the toggle off — or losing the BLE link — calls `reset()`, which clears `basis` / `latestSample` and points `target` at identity. `displayed` is deliberately left alone so `advance` eases the cube home rather than snapping at a frame boundary. "Reset orientation" calls `recenter()` **and** animates the orbiter to identity, so both layers of `outer` come home as one motion.
 
-**Disconnect.** Losing the cube runs `RubiksCube.resetView()`: gyro `reset()`, orientation home (animated when a scope is bound, `orbiter.resetImmediately()` otherwise), and logical/visual state back to solved. Everything on screen came from a cube that is no longer reporting — a pose frozen at the angle the link died at, and a permutation the user is free to change behind our back — and both read as "broken" rather than "disconnected".
+**Disconnect.** Losing the cube runs `RubiksCube.resetView()`: gyro `reset()`, orientation home (animated when a scope is bound, `orbiter.resetImmediately()` otherwise), and logical/visual state back to solved. Everything on screen came from a cube that is no longer reporting — a pose frozen at the angle the link died at, and a permutation the user is free to change behind our back — and both read as "broken" rather than "disconnected". The Gyro button is hidden while disconnected (`connection.isConnected && gyroSupported == true`), which matters because `connectionSummary` falls back to the most-recently-seen paired cube when no MAC is active and the button would otherwise linger.
+
+**Live tracking = preference AND connection.** `cube.gyroscope.setEnabled(...)` is driven by `combine(_gyroEnabled, ble.connectionState)`, not by the preference alone. A gyroscope left "on" with nothing feeding it is not harmless: `CubeOrbiter`'s auto-snap is gated on `!gyroscope.enabled`, so the cube would stay un-snappable for the whole time it is disconnected. Gating on the connection also means a reconnect resumes tracking by itself, with no second copy of the preference to keep in sync.
 
 **Persistence.** The toggle lives in the per-profile `solving.gyroEnabled` setting (default false), surfaced as `SolveViewModel.gyroEnabled`. `_gyroEnabled` is seeded from `cube.gyroscope.enabled` rather than `false`: `RubiksCube` is an app-wide singleton while the VM is recreated on every navigation back to Solve, so seeding from `false` would cycle the gyro off then on and discard the user's re-centering.
 
@@ -1307,6 +1309,7 @@ Centralised in `SettingsRepository.Keys` so a typo at one call site can't drift 
 ```
 solving.inspectionEnabled   "1"/"0"   default true
 solving.keepScreenOn        "1"/"0"   default true
+solving.gyroEnabled         "1"/"0"   default false
 solving.anyMoveStartsNewSolve "1"/"0" default true
 display.theme.seed          ThemeSeed.key – "blue", "green", "purple", "orange", "red", "pink", "yellow", "mono"
 display.theme.mode          ThemeMode.key – "system", "light", "dark"

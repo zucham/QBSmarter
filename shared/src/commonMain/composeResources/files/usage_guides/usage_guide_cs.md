@@ -94,7 +94,7 @@ Pokud máte zapnutý gyroskop, vizualizace bude místo toho automaticky kopírov
 Pod kostkou se nachází řada akčních tlačítek:
 
 - **`Resetovat orientaci`** - vrátí pohled na kostku do výchozí orientace (bílá strana nahoře, zelená strana dopředu). Tlačítko je vidět pouze tehdy, kdy je kostka odkloněná od této výchozí orientace.
-- **`Gyro`** - zapne nebo vypne řízení vizualizace gyroskopem (pouze pro kostky podporující tuto funkci).
+- **`Gyro`** - zapne nebo vypne řízení vizualizace gyroskopem (zobrazuje se pouze při připojené kostce, která tuto funkci podporuje).
 - **`Resetovat stav`** - vrátí logický stav kostky do složené pozice a vygeneruje nové zamíchání. Toto tlačítko je červené, neboť přepíše veškerá data o aktuálním stavu kostky i měření času.
 
 Pod akční řadou se nachází karta se zamícháním (scramblem) a tlačítkem **`Nový`** pro generování nového zamíchání. Pod ní je v dolní části obrazovky časovač a nakonec rychlý přehled statistik (osobní rekord, průměry, počty složení atd.).

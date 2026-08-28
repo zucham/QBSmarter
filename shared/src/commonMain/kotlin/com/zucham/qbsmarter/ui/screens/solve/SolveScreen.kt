@@ -256,19 +256,25 @@ fun SolveScreen(onNavigateToDevices: () -> Unit = {}) {
             onResetOrientation = vm::resetOrientation,
             onResetState = vm::resetState,
             onToggleGyro = vm::toggleGyro,
-            // Hide the gyro button by default – show it only when the
-            // INFO handshake explicitly confirmed the cube has a gyro.
-            // For unknown (null) and unsupported (false) we hide the
-            // button entirely; the user discovers the toggle only on
-            // hardware that actually has the feature.
-            showGyroButton = connection.gyroSupported == true,
+            // Hide the gyro button by default – show it only when a
+            // cube is actually on the wire AND the INFO handshake
+            // confirmed it has a gyro. For unknown (null) and
+            // unsupported (false) we hide the button entirely; the user
+            // discovers the toggle only on hardware that has the
+            // feature. The connected term matters because
+            // connectionSummary falls back to the most recently seen
+            // paired cube when no MAC is active, so without it the
+            // button would linger after a disconnect, offering to track
+            // a cube that isn't sending anything.
+            showGyroButton = connection.isConnected && connection.gyroSupported == true,
             gyroEnabled = gyroEnabled,
             // Reset Orientation is only meaningful when there's
             // something to reset. That's true when the drag offset is
             // off-identity, and also whenever the gyro is live – the
             // button then re-homes the gyro baseline, which is the only
             // way back to a default pose while the cube is being moved.
-            showResetOrientation = !isOrientationAligned || gyroEnabled,
+            showResetOrientation = !isOrientationAligned ||
+                (gyroEnabled && connection.isConnected),
         )
         ScrambleCard(scramble, scrambleProgress, deviationMoves, vm::newScramble)
 

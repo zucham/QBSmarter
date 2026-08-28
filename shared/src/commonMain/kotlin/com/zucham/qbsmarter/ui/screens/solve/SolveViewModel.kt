@@ -33,6 +33,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.launchIn
@@ -259,7 +260,20 @@ class SolveViewModel(
         gyroEnabledSetting()
             .onEach { _gyroEnabled.value = it }
             .launchIn(viewModelScope)
-        _gyroEnabled
+        // Live tracking is the preference AND a cube on the wire, not
+        // the preference alone. A gyroscope left "on" with nothing
+        // feeding it isn't harmless: [CubeOrbiter]'s drag-end auto-snap
+        // is suppressed for as long as the gyro is enabled (the composed
+        // pose isn't axis-aligned, so snapping the drag half achieves
+        // nothing), which would leave the cube un-snappable for the
+        // whole time it is disconnected. Gating on the connection also
+        // means a reconnect resumes tracking on its own, with no second
+        // copy of the preference to keep in sync.
+        combine(
+            _gyroEnabled,
+            ble.connectionState,
+        ) { enabled, state -> enabled && state == ConnectionState.CONNECTED }
+            .distinctUntilChanged()
             .onEach { cube.gyroscope.setEnabled(it) }
             .launchIn(viewModelScope)
 
