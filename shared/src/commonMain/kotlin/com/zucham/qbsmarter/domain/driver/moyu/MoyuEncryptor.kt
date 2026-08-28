@@ -3,6 +3,7 @@ package com.zucham.qbsmarter.domain.driver.moyu
 import com.zucham.qbsmarter.domain.driver.AesCbcMacSaltEncryptor
 import com.zucham.qbsmarter.domain.driver.CubeEncryptor
 import com.zucham.qbsmarter.domain.driver.macSaltFromMacAddress
+import com.zucham.qbsmarter.domain.driver.protocol.CubeIdentity
 
 /**
  * Per-cube encryptor for MoYu WeiLong V10 AI smart cubes. AES-128 CBC
@@ -47,3 +48,18 @@ class MoyuEncryptor(salt: ByteArray) : CubeEncryptor {
  * grepping for the cube vendor find the construction site.
  */
 fun moyuSaltFromMac(mac: String): ByteArray = macSaltFromMacAddress(mac)
+
+/**
+ * Build the encryptor for a MoYu WCU cube from its [CubeIdentity].
+ *
+ * The registry's `createEncryptor` hook for the `moyu-wcu` row. A fresh
+ * instance per connection, since the salt is per-cube.
+ *
+ * Deliberately named for WCU rather than for the vendor: MoYu's other
+ * protocol, the older
+ * [com.zucham.qbsmarter.domain.driver.moyu.MoyuMhcProtocol], is
+ * plaintext and has no encryptor at all, so "the MoYu encryptor" would
+ * be a misleading name for something only half the brand's cubes use.
+ */
+internal fun moyuWcuEncryptorFor(identity: CubeIdentity): CubeEncryptor =
+    MoyuEncryptor(moyuSaltFromMac(identity.mac))

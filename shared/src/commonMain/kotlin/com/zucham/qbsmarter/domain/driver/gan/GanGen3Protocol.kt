@@ -7,10 +7,14 @@ import com.zucham.qbsmarter.domain.driver.BitView
 import com.zucham.qbsmarter.domain.driver.CubeVendor
 import com.zucham.qbsmarter.domain.driver.SmartCubeCommand
 import com.zucham.qbsmarter.domain.driver.SmartCubeEvent
+import com.zucham.qbsmarter.domain.driver.protocol.CubeProtocol
+import com.zucham.qbsmarter.domain.driver.protocol.GAN_FACE_ORDER
+import com.zucham.qbsmarter.domain.driver.protocol.MoveRecoveryFifo
+import com.zucham.qbsmarter.domain.driver.protocol.ProtocolIo
 import com.zucham.qbsmarter.util.currentTimeMillis
 
 /**
- * GAN Gen3 protocol parser. Supported cubes:
+ * GAN Gen3 wire protocol. Supported cubes:
  *   • GAN356 i Carry 2
  *
  * Gen3 introduced significant changes from Gen2:
@@ -23,12 +27,12 @@ import com.zucham.qbsmarter.util.currentTimeMillis
  *   • **Move-history backfill.** Where Gen2 limits its replay buffer to
  *     7 moves and falls back to a full Facelets resync on overflow,
  *     Gen3 supports an opcode 0x68 0x03 that asks the cube to retransmit
- *     a window of moves identified by serial number. The parser
- *     leverages this via a local FIFO: when a move event arrives out
- *     of sequence, it gets buffered; the parser asks for the missing
- *     window via [historyRequester]; once the cube's MOVE_HISTORY (0x06)
- *     event lands, the missing moves are injected at the correct buffer
- *     position and the FIFO evicts contiguously.
+ *     a window of moves identified by serial number. This protocol
+ *     leverages it via [MoveRecoveryFifo]: when a move event arrives out
+ *     of sequence it gets buffered, the FIFO asks for the missing window
+ *     through the `requestHistory` callback, and once the cube's
+ *     MOVE_HISTORY (0x06) event lands the missing moves are injected at
+ *     the correct buffer position and the FIFO drains contiguously.
  *
  *   • **No gyro.** The Gen3 protocol omits gyroscope data – the i Carry 2
  *     hardware doesn't include the sensor. Gyro events are simply never
@@ -39,41 +43,28 @@ import com.zucham.qbsmarter.util.currentTimeMillis
  *     byte). The face's URFDLB index is recovered by `indexOf` on the
  *     [GAN_GEN3_4_FACE_ONE_HOT] table.
  *
- * **Disconnect rule.** If the FIFO grows beyond [BUFFER_OVERFLOW_LIMIT]
- * entries, the cube has either lost connection coherence or is
- * generating moves faster than we can backfill. Our orchestrator
- * has a global [SmartCubeEvent.MovesMissed] → Facelets path that
- * achieves the same recovery without forcing the user back through a
- * full pair flow, so we emit MovesMissed instead.
+ * **Overflow rule.** If the FIFO grows past its overflow limit, the cube
+ * has either lost connection coherence or is generating moves faster
+ * than we can backfill. Our orchestrator has a global
+ * [SmartCubeEvent.MovesMissed] → Facelets path that achieves the same
+ * recovery without forcing the user back through a full pair flow, so
+ * [MoveRecoveryFifo] emits MovesMissed rather than disconnecting.
+ *
+ * Per-connection instance, so the FIFO never carries a stale serial
+ * baseline from a previous cube.
  */
-internal class GanGen3Parser : GanParser {
+internal class GanGen3Protocol : CubeProtocol {
 
-    /** Latest serial reported by the cube (move or facelets). */
-    private var serial: Int = -1
+    override val vendor: CubeVendor = CubeVendor.GAN
 
-    /** Last serial successfully evicted from the buffer = "we're in sync up to here". */
-    private var lastSerial: Int = -1
-
-    /** Wall-clock of the last actually-emitted move. Used to debounce facelets-driven recovery. */
-    private var lastLocalTimestamp: Long = 0
-
-    /** FIFO of pending move events. Populated by MOVE and MOVE_HISTORY, drained by [evictMoveBuffer]. */
-    private val moveBuffer: ArrayDeque<SmartCubeEvent.Move> = ArrayDeque()
+    override val id: String = "gan-gen3"
 
     /**
-     * For each pending move, also keep its serial – ArrayDeque<Pair<>>
-     * would work but a parallel deque keeps the public event type clean.
-     * Indexed identically to [moveBuffer].
+     * Pending moves plus the serial bookkeeping that orders them. Owns
+     * the rolling serial, the last-emitted serial, and the timestamp of
+     * the last live move packet.
      */
-    private val moveBufferSerials: ArrayDeque<Int> = ArrayDeque()
-
-    override fun reset() {
-        serial = -1
-        lastSerial = -1
-        lastLocalTimestamp = 0
-        moveBuffer.clear()
-        moveBufferSerials.clear()
-    }
+    private val fifo = MoveRecoveryFifo()
 
     override fun buildCommand(cmd: SmartCubeCommand): ByteArray? = when (cmd) {
         SmartCubeCommand.RequestFacelets ->
@@ -117,12 +108,12 @@ internal class GanGen3Parser : GanParser {
         }
     }
 
-    override suspend fun parseStatePacket(
-        message: ByteArray,
-        historyRequester: suspend (Int, Int) -> Unit,
-    ): List<SmartCubeEvent> {
+    override suspend fun decode(packet: ByteArray, io: ProtocolIo): List<SmartCubeEvent> {
+        val requestHistory: suspend (Int, Int) -> Unit = { start, count ->
+            io.send(SmartCubeCommand.RequestMoveHistory(start, count))
+        }
         val ts = currentTimeMillis()
-        val msg = BitView(message)
+        val msg = BitView(packet)
 
         val magic = msg.word(0, 8)
         val eventType = msg.word(8, 8)
@@ -131,9 +122,9 @@ internal class GanGen3Parser : GanParser {
         if (magic != 0x55L || dataLength == 0L) return emptyList()
 
         return when (eventType.toInt()) {
-            0x01 -> parseMove(msg, ts, historyRequester)
+            0x01 -> parseMove(msg, ts, requestHistory)
             0x06 -> parseMoveHistory(msg, ts, dataLength.toInt())
-            0x02 -> parseFacelets(msg, ts, historyRequester)
+            0x02 -> parseFacelets(msg, ts, requestHistory)
             0x07 -> parseHardware(msg, ts)
             0x10 -> parseBattery(msg, ts)
             0x11 -> listOf(SmartCubeEvent.Disconnect)
@@ -144,17 +135,19 @@ internal class GanGen3Parser : GanParser {
     private suspend fun parseMove(
         v: BitView,
         ts: Long,
-        historyRequester: suspend (Int, Int) -> Unit,
+        requestHistory: suspend (Int, Int) -> Unit,
     ): List<SmartCubeEvent> {
         // Accept move events only after the first facelets state event:
         // before that, lastSerial is undefined and we have no anchor for
         // the diff calculation. Same constraint as Gen2.
-        if (lastSerial == -1) return emptyList()
+        if (fifo.lastSerial == -1) return emptyList()
 
-        lastLocalTimestamp = ts
+        fifo.lastLocalTimestamp = ts
         val cubeTs = v.wordLE(24, 32)
         val s = v.wordLE(56, 16).toInt() and 0xFF  // serial wraps at 256 even though field is 16 bits
-        serial = s
+        // Set unconditionally: an unrecognised face mask skips the push
+        // below, and the cube's serial still advanced.
+        fifo.serial = s
 
         val direction = v.word(72, 2).toInt()
         // 6-bit one-hot face encoding. Lookup table: 2→U, 32→R, 8→F,
@@ -166,23 +159,23 @@ internal class GanGen3Parser : GanParser {
         val face = GAN_FACE_ORDER.getOrNull(faceIdx)
 
         if (face != null) {
-            moveBuffer.addLast(
+            fifo.push(
                 SmartCubeEvent.Move(
                     face = face,
                     cw = direction == 0,
                     cubeTimestamp = cubeTs,
                     deviceTimestamp = ts,
                 ),
+                s,
             )
-            moveBufferSerials.addLast(s)
         }
 
-        return evictMoveBuffer(allowHistoryRequest = true, ts = ts, historyRequester = historyRequester)
+        return fifo.drain(allowHistoryRequest = true, ts = ts, requestHistory = requestHistory)
     }
 
     private suspend fun parseMoveHistory(
         v: BitView,
-        @Suppress("UNUSED_PARAMETER") ts: Long,
+        ts: Long,
         dataLength: Int,
     ): List<SmartCubeEvent> {
         val startSerial = v.word(24, 8).toInt()
@@ -208,7 +201,7 @@ internal class GanGen3Parser : GanParser {
             // computation in [SolveTimer] uses first/last timestamps so
             // historical zeros only matter if a backfill move is the
             // first or last event of the solve, which is rare.
-            injectMissedMoveToBuffer(
+            fifo.injectRecovered(
                 move = SmartCubeEvent.Move(
                     face = face,
                     cw = direction == 0,
@@ -219,28 +212,30 @@ internal class GanGen3Parser : GanParser {
             )
         }
 
-        // No history request during eviction here – we're already inside
+        // No history request during the drain here – we're already inside
         // a history-response path, and re-requesting would loop.
-        return evictMoveBuffer(allowHistoryRequest = false, ts = ts, historyRequester = { _, _ -> })
+        return fifo.drain(allowHistoryRequest = false, ts = ts, requestHistory = { _, _ -> })
     }
 
     private suspend fun parseFacelets(
         v: BitView,
         ts: Long,
-        historyRequester: suspend (Int, Int) -> Unit,
+        requestHistory: suspend (Int, Int) -> Unit,
     ): List<SmartCubeEvent> {
         val s = v.wordLE(24, 16).toInt() and 0xFF
-        serial = s
+        fifo.serial = s
 
         // Recover any missed moves: if the periodic facelets event
         // reports a serial higher than what we've evicted, ask for the
         // gap. Debounce so we don't fire a recovery in the middle of a
         // burst of live moves – wait for 500 ms of move silence first.
-        if (lastSerial != -1 && lastLocalTimestamp != 0L && (ts - lastLocalTimestamp) > FACELETS_DEBOUNCE_MS) {
-            checkIfMoveMissed(historyRequester)
+        if (fifo.lastSerial != -1 && fifo.lastLocalTimestamp != 0L &&
+            (ts - fifo.lastLocalTimestamp) > FACELETS_DEBOUNCE_MS
+        ) {
+            fifo.requestMissedIfBehind(requestHistory)
         }
 
-        if (lastSerial == -1) lastSerial = s
+        if (fifo.lastSerial == -1) fifo.lastSerial = s
 
         val cp = IntArray(N_CORNERS)
         val co = IntArray(N_CORNERS)
@@ -306,112 +301,6 @@ internal class GanGen3Parser : GanParser {
         return listOf(SmartCubeEvent.Battery(deviceTimestamp = ts, level = level))
     }
 
-    /**
-     * Drain the FIFO from the head as long as moves are contiguous in
-     * serial order. Stops on the first gap; if [allowHistoryRequest] is
-     * true, fires the [historyRequester] callback to ask the cube to
-     * fill the gap.
-     *
-     * If the buffer grows beyond the safety limit we also fire a
-     * MovesMissed event so the orchestrator can schedule a Facelets
-     * resync. That's the bail-out for when backfill itself isn't
-     * keeping up.
-     */
-    private suspend fun evictMoveBuffer(
-        allowHistoryRequest: Boolean,
-        ts: Long,
-        historyRequester: suspend (Int, Int) -> Unit,
-    ): List<SmartCubeEvent> {
-        val emitted = mutableListOf<SmartCubeEvent>()
-        while (moveBuffer.isNotEmpty()) {
-            val headSerial = moveBufferSerials.first()
-            val diff = if (lastSerial == -1) 1 else ((headSerial - lastSerial) and 0xFF)
-            if (diff > 1) {
-                if (allowHistoryRequest) {
-                    historyRequester(headSerial, diff)
-                }
-                break
-            }
-            emitted += moveBuffer.removeFirst()
-            moveBufferSerials.removeFirst()
-            lastSerial = headSerial
-        }
-        if (moveBuffer.size > BUFFER_OVERFLOW_LIMIT) {
-            // Backfill isn't catching up. Surface a MovesMissed event so
-            // the orchestrator can do a Facelets resync. Clear the FIFO
-            // so we don't keep growing while the resync is in flight –
-            // the resync will reset our serial baseline anyway.
-            val missed = moveBuffer.size
-            moveBuffer.clear()
-            moveBufferSerials.clear()
-            emitted += SmartCubeEvent.MovesMissed(missedCount = missed, deviceTimestamp = ts)
-        }
-        return emitted
-    }
-
-    /**
-     * Insert a move recovered via MOVE_HISTORY into the FIFO at the
-     * correct position – immediately before the current buffer head if
-     * its serial is exactly one less than the head's.
-     * Recoveries land in reverse order (newest first),
-     * so we just need to prepend when the math works.
-     */
-    private fun injectMissedMoveToBuffer(move: SmartCubeEvent.Move, serialOfMove: Int) {
-        if (moveBuffer.isNotEmpty()) {
-            // Already in buffer? Skip.
-            if (moveBufferSerials.contains(serialOfMove)) return
-            val headSerial = moveBufferSerials.first()
-            // Must fit in the (lastSerial, headSerial) range and be
-            // exactly head-1 to be the next prepend.
-            if (!isSerialInRange(lastSerial, headSerial, serialOfMove)) return
-            if (serialOfMove == ((headSerial - 1) and 0xFF)) {
-                moveBuffer.addFirst(move)
-                moveBufferSerials.addFirst(serialOfMove)
-            }
-        } else {
-            // Empty buffer. Lost-move recovery from a periodic facelets
-            // event lands here. Validate against the (lastSerial, serial]
-            // range – with serial as the most-recent thing we know.
-            if (isSerialInRange(lastSerial, serial, serialOfMove, closedEnd = true)) {
-                moveBuffer.addFirst(move)
-                moveBufferSerials.addFirst(serialOfMove)
-            }
-        }
-    }
-
-    private suspend fun checkIfMoveMissed(historyRequester: suspend (Int, Int) -> Unit) {
-        val diff = (serial - lastSerial) and 0xFF
-        if (diff <= 0) return
-        // Skip the firmware-bug case where serial == 0 (the wrap point)
-        // would yield bogus moves.
-        if (serial == 0) return
-        val headSerial = moveBufferSerials.firstOrNull() ?: ((serial + 1) and 0xFF)
-        historyRequester(headSerial, diff + 1)
-    }
-
-    /**
-     * Check if [serial] falls within the circular range (start, end) of
-     * 8-bit serial numbers. By default the range is open at both ends;
-     * pass [closedStart] / [closedEnd] to close them.
-     *
-     * "Circular" because serials wrap at 256, so a range from 250 to 5
-     * is valid and includes 251..255, 0..4.
-     */
-    private fun isSerialInRange(
-        start: Int,
-        end: Int,
-        serial: Int,
-        closedStart: Boolean = false,
-        closedEnd: Boolean = false,
-    ): Boolean {
-        val totalSpan = (end - start) and 0xFF
-        val offset = (serial - start) and 0xFF
-        val withinSpan = totalSpan >= offset
-        val notAtStart = closedStart || ((start - serial) and 0xFF) > 0
-        val notAtEnd = closedEnd || ((end - serial) and 0xFF) > 0
-        return withinSpan && notAtStart && notAtEnd
-    }
-
     private companion object {
         /**
          * Debounce period before a periodic Facelets event triggers a
@@ -421,15 +310,6 @@ internal class GanGen3Parser : GanParser {
          * receive normally.
          */
         const val FACELETS_DEBOUNCE_MS = 500L
-
-        /**
-         * If the FIFO grows larger than this, backfill isn't keeping up
-         * and we bail to a Facelets resync. 16 was the upstream
-         * disconnect threshold; we keep the same number but emit
-         * MovesMissed instead of disconnecting (the orchestrator's
-         * resync path is gentler than forcing a re-pair).
-         */
-        const val BUFFER_OVERFLOW_LIMIT = 16
     }
 }
 
@@ -444,6 +324,11 @@ internal class GanGen3Parser : GanParser {
  *   index 3 → 1  → D
  *   index 4 → 16 → L
  *   index 5 → 4  → B
+ *
+ * Lives here rather than in a shared codec file because it is the one
+ * table both GAN generations that use one-hot faces share, and nothing
+ * else in the app has any use for it. [GanGen4Protocol] reads it from
+ * this same package.
  */
 internal val GAN_GEN3_4_FACE_ONE_HOT = listOf(2, 32, 8, 1, 16, 4)
 

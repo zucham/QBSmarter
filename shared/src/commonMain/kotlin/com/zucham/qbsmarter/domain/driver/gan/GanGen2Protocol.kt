@@ -2,7 +2,6 @@ package com.zucham.qbsmarter.domain.driver.gan
 
 import com.zakgof.korender.math.Quaternion
 import com.zakgof.korender.math.Vec3
-import com.zucham.qbsmarter.domain.cube.CubeFace
 import com.zucham.qbsmarter.domain.cube.CubeState
 import com.zucham.qbsmarter.domain.cube.N_CORNERS
 import com.zucham.qbsmarter.domain.cube.N_EDGES
@@ -10,42 +9,47 @@ import com.zucham.qbsmarter.domain.driver.BitView
 import com.zucham.qbsmarter.domain.driver.CubeVendor
 import com.zucham.qbsmarter.domain.driver.SmartCubeCommand
 import com.zucham.qbsmarter.domain.driver.SmartCubeEvent
+import com.zucham.qbsmarter.domain.driver.protocol.CubeProtocol
+import com.zucham.qbsmarter.domain.driver.protocol.GAN_FACE_ORDER
+import com.zucham.qbsmarter.domain.driver.protocol.ProtocolIo
+import com.zucham.qbsmarter.domain.driver.protocol.ganSignMagnitude
 import com.zucham.qbsmarter.util.currentTimeMillis
 
 /**
- * GAN's URFDLB face index. Index 0 is U, 1 is R, etc. Used to translate
- * the cube's 3-bit face number into our [CubeFace]. Shared across
- * generations – Gen3/Gen4 use a slightly different encoding (the face
- * is packed into a 6-bit one-hot field rather than a direct 3-bit index)
- * and look up against this same list.
- */
-internal val GAN_FACE_ORDER = listOf(
-    CubeFace.U, CubeFace.R, CubeFace.F, CubeFace.D, CubeFace.L, CubeFace.B,
-)
-
-/**
- * Parses Gen2 state packets and builds Gen2 command packets. Stateful
- * because move events are differentiated by serial number – a single
- * notification may report up to 7 turns since the last one, so we track
- * the previous serial.
+ * GAN Gen2 wire protocol. Supported cubes:
+ *   • GAN356 i Carry, i Carry S, i 3
+ *   • GAN12 ui, GAN Mini ui FreePlay
+ *   • Monster Go 3Ai
  *
- * **Recovery model.** When the diff exceeds the cube's 7-move replay
- * buffer ([MOVE_HISTORY_SIZE]), Gen2 has no targeted retransmit – the
- * parser emits a [SmartCubeEvent.MovesMissed] and the orchestrator
- * recovers by issuing a full [SmartCubeCommand.RequestFacelets] resync.
- * That's why [parseStatePacket] never invokes its `historyRequester`
- * callback for Gen2; the callback exists for Gen3/Gen4 backfill only.
+ * **Everything is bit-packed.** Gen2 predates the byte-aligned framing
+ * Gen3 and Gen4 use: the opcode is a 4-bit field, moves are 5 bits each
+ * and facelet permutations straddle byte boundaries throughout. Every
+ * offset here is a bit offset into [BitView], and the numbers are not
+ * negotiable.
+ *
+ * **Recovery is a full resync, not a backfill.** A single notification
+ * reports up to [MOVE_HISTORY_SIZE] turns since the last one, indexed by
+ * a rolling serial. Beyond that depth the cube has already overwritten
+ * the moves and there is no targeted retransmit opcode to ask for them
+ * — so this protocol emits [SmartCubeEvent.MovesMissed] and lets the
+ * orchestrator recover with a full [SmartCubeCommand.RequestFacelets].
+ * That is why [buildCommand] returns null for
+ * [SmartCubeCommand.RequestMoveHistory] and why [decode] never asks the
+ * driver to write anything: the serial-gap backfill Gen3 and Gen4
+ * run through `MoveRecoveryFifo` has no Gen2 equivalent.
+ *
+ * Stateful: it tracks the previous serial and the running cube clock.
+ * Per-connection instance, so none of that needs resetting.
  */
-internal class GanGen2Parser : GanParser {
+internal class GanGen2Protocol : CubeProtocol {
+
+    override val vendor: CubeVendor = CubeVendor.GAN
+
+    override val id: String = "gan-gen2"
+
     private var lastSerial: Int = -1
     private var lastMoveTimestamp: Long = 0
     private var cubeTimestamp: Long = 0
-
-    override fun reset() {
-        lastSerial = -1
-        lastMoveTimestamp = 0
-        cubeTimestamp = 0
-    }
 
     /** Build a command's raw 20-byte payload (pre-encryption). */
     override fun buildCommand(cmd: SmartCubeCommand): ByteArray? = when (cmd) {
@@ -64,12 +68,9 @@ internal class GanGen2Parser : GanParser {
     }
 
     /** Decode one decrypted notification into 0..N events. */
-    override suspend fun parseStatePacket(
-        message: ByteArray,
-        historyRequester: suspend (Int, Int) -> Unit,
-    ): List<SmartCubeEvent> {
+    override suspend fun decode(packet: ByteArray, io: ProtocolIo): List<SmartCubeEvent> {
         val timestamp = currentTimeMillis()
-        val msg = BitView(message)
+        val msg = BitView(packet)
         return when (msg.word(0, 4).toInt()) {
             0x01 -> parseGyro(msg, timestamp)
             0x02 -> parseMove(msg, timestamp)
@@ -93,10 +94,14 @@ internal class GanGen2Parser : GanParser {
         return listOf(
             SmartCubeEvent.Gyro(
                 quat = Quaternion(
-                    fixSigned(qw, 16),
-                    Vec3(fixSigned(qx, 16), fixSigned(qy, 16), fixSigned(qz, 16)),
+                    ganSignMagnitude(qw, 16),
+                    Vec3(ganSignMagnitude(qx, 16), ganSignMagnitude(qy, 16), ganSignMagnitude(qz, 16)),
                 ),
-                angularVel = Vec3(fixSigned(vx, 4), fixSigned(vy, 4), fixSigned(vz, 4)),
+                angularVel = Vec3(
+                    ganSignMagnitude(vx, 4),
+                    ganSignMagnitude(vy, 4),
+                    ganSignMagnitude(vz, 4),
+                ),
                 deviceTimestamp = ts,
             ),
         )
@@ -224,16 +229,4 @@ internal class GanGen2Parser : GanParser {
          */
         const val MOVE_HISTORY_SIZE = 7
     }
-}
-
-/**
- * GAN packs each gyro axis as `[sign_bit | magnitude_bits]`. Map back to
- * a [-1, 1] float. Shared across Gen2 and Gen4 (Gen3 doesn't report
- * gyro at all).
- */
-internal fun fixSigned(value: Int, bits: Int): Float {
-    val sign = 1 - (value shr (bits - 1)) * 2
-    val mag = value and ((1 shl (bits - 1)) - 1)
-    val denom = (1 shl (bits - 1)) - 1
-    return sign * mag.toFloat() / denom
 }

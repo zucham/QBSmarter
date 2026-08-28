@@ -1,32 +1,26 @@
 package com.zucham.qbsmarter.domain.driver.moyu
 
-import co.touchlab.kermit.Logger
-import com.zakgof.korender.math.Quaternion
 import com.zakgof.korender.math.Vec3
 import com.zucham.qbsmarter.domain.cube.CubeFace
 import com.zucham.qbsmarter.domain.driver.BitView
-import com.zucham.qbsmarter.domain.driver.CubeEncryptor
-import com.zucham.qbsmarter.domain.driver.CubeTransport
 import com.zucham.qbsmarter.domain.driver.CubeVendor
 import com.zucham.qbsmarter.domain.driver.SmartCubeCommand
-import com.zucham.qbsmarter.domain.driver.SmartCubeDriver
 import com.zucham.qbsmarter.domain.driver.SmartCubeEvent
+import com.zucham.qbsmarter.domain.driver.protocol.CubeProtocol
+import com.zucham.qbsmarter.domain.driver.protocol.ProtocolIo
+import com.zucham.qbsmarter.domain.driver.protocol.leInt32
+import com.zucham.qbsmarter.domain.driver.protocol.unitQuaternion
 import com.zucham.qbsmarter.util.currentTimeMillis
-import kotlinx.coroutines.CoroutineDispatcher
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.flow.MutableSharedFlow
-import kotlinx.coroutines.flow.SharedFlow
-import kotlinx.coroutines.flow.asSharedFlow
-import kotlinx.coroutines.launch
 
 /**
- * Smart-cube driver for the MoYu WeiLong V10 AI.
+ * MoYu WCU wire protocol — the WeiLong V10 / V11 AI family, advertised
+ * as `WCU_MY3x` on service `0783b03e-…cb0`.
  *
- * **Protocol shape.** 20-byte AES-CBC-encrypted packets in both
- * directions, message type in byte 0:
+ * One of two unrelated protocols MoYu ships under one brand; the other
+ * is the older, plaintext [MoyuMhcProtocol]. Everything here is
+ * AES-CBC encrypted with a MAC-salted key and IV (see
+ * [moyuWcuEncryptorFor]), in 20-byte packets both directions, with the
+ * message type in byte 0:
  *
  *   | Hex   | Meaning                                              |
  *   |-------|------------------------------------------------------|
@@ -37,60 +31,42 @@ import kotlinx.coroutines.launch
  *   | 0xAB  | Gyroscope – packed quaternion                        |
  *   | 0xAC  | Gyro on/off acknowledgement                          |
  *
- * **Recovery model.** MoYu V10's move event reports the last 5 moves
- * with a single rolling 8-bit serial counter. Same pattern as GAN
- * Gen2's 7-move buffer; no targeted move-history retransmit is
- * documented in the protocol. So we mirror Gen2 exactly: on a serial
- * jump greater than [MOVE_HISTORY_SIZE] we emit
- * [SmartCubeEvent.MovesMissed], and the connection orchestrator's
- * existing debounced Facelets-resync path handles recovery.
+ * **Recovery model.** The move event reports the last 5 moves with a
+ * single rolling 8-bit serial counter. Same pattern as GAN Gen2's
+ * 7-move buffer; no targeted move-history retransmit is documented in
+ * the protocol. So we mirror Gen2 exactly: on a serial jump greater
+ * than [MOVE_HISTORY_SIZE] we emit [SmartCubeEvent.MovesMissed], and
+ * the connection orchestrator's existing debounced Facelets-resync
+ * path handles recovery.
  *
  * **Init quirk.** Per the protocol writeup: "Immediately after
  * connecting to the cube, you need to write a Cube Info (0xA1)
- * message to initialise correctly the cube." The connection
- * orchestrator already sends [SmartCubeCommand.RequestHardware] as
- * the first post-connect command, which maps here to 0xA1, so this
- * happens naturally.
+ * message to initialise correctly the cube." [onConnected] does that
+ * and rather more besides — see there for the doubled request burst
+ * some V10 variants need before they will stream anything at all.
  *
- * **Gyro state.** The cube ships with gyro enabled by default. We
- * proactively send `0xAC enable` after connect to ensure a known
- * state (the previous app session may have left it disabled, since
- * the setting is persistent across reconnects). See [enableGyro].
+ * **Gyro state.** The cube ships with gyro enabled by default, but the
+ * setting is persistent across reconnects, so a previous client
+ * session may have left it off. [onConnected] therefore sends the
+ * `0xAC` enable unconditionally to force a known state.
  *
  * **Reset.** The protocol writeup documents no reset opcode. The
- * `SmartCubeCommand.RequestReset` case in [buildCommand] returns null
+ * [SmartCubeCommand.RequestReset] case in [buildCommand] returns null
  * and the orchestrator's reset path falls back to whatever
  * higher-level "reset visual state" the app has – which is exactly
  * what we want, since you can't software-reset a cube to "solved"
  * anyway (the cube reports the physical state; the app's notion of
  * "solved" is an internal reset of CubeState).
  *
- * **Stable events flow.** Like [com.zucham.qbsmarter.domain.driver.gan.GanCubeDriver],
- * the `events` SharedFlow is stable for the lifetime of the driver
- * (a Koin singleton). Cube swaps don't recreate it, so subscribers
- * don't need to re-bind.
+ * Stateful: it tracks the rolling move serial, the wall-clock of the
+ * last emitted move and the accumulated cube clock. Per-connection
+ * instance, so none of that needs resetting.
  */
-class MoyuCubeDriver(
-    parserDispatcher: CoroutineDispatcher = Dispatchers.Default,
-) : SmartCubeDriver {
+internal class MoyuWcuProtocol : CubeProtocol {
 
-    private val log = Logger.withTag("MoyuCubeDriver")
-    private val scope = CoroutineScope(SupervisorJob() + parserDispatcher)
+    override val vendor: CubeVendor = CubeVendor.MOYU
 
-    private var transport: CubeTransport? = null
-    private var encryptor: CubeEncryptor? = null
-    private var ingestJob: Job? = null
-
-    private val _events = MutableSharedFlow<SmartCubeEvent>(
-        replay = 0,
-        extraBufferCapacity = 64,
-    )
-    override val events: SharedFlow<SmartCubeEvent> = _events.asSharedFlow()
-
-    // ----- Parser state -----
-    //
-    // Reset on every (re-)connect via [resetParserState] so stale
-    // serials from a previous cube don't affect the new session.
+    override val id: String = "moyu-wcu"
 
     /** Last move serial we successfully processed. -1 before the first
      *  Facelets snapshot establishes the baseline. Same anchor rule as
@@ -110,78 +86,52 @@ class MoyuCubeDriver(
      *  uses for its drift-free duration calculation. */
     private var cubeTimestamp: Long = 0
 
-    override suspend fun connect(transport: CubeTransport, encryptor: CubeEncryptor) {
-        if (this.transport === transport && ingestJob?.isActive == true) {
-            // Idempotent reconnect – same transport already running.
-            return
-        }
-        disconnect()
-        resetParserState()
-        this.transport = transport
-        this.encryptor = encryptor
-        transport.enableNotifications()
-        ingestJob = scope.launch {
-            log.d { "Driver collecting from MoYu transport" }
-            transport.incoming.collect { raw ->
-                runCatching {
-                    val plain = encryptor.decrypt(raw)
-                    val events = parsePacket(plain)
-                    log.d { "decrypted -> ${events.size} events" }
-                    events.forEach { event ->
-                        log.d { "emit $event" }
-                        _events.tryEmit(event)
-                    }
-                }.onFailure { log.e(it) { "Failed to parse MoYu packet" } }
-            }
-            log.w { "MoYu driver collect ended" }
-        }
-    }
-
-    override suspend fun send(command: SmartCubeCommand) {
-        val t = transport ?: return
-        val e = encryptor ?: return
-        val cmd = buildCommand(command) ?: return
-        t.write(e.encrypt(cmd))
-    }
-
     /**
-     * Send the proprietary `0xAC` gyro-enable command. The cube
-     * acknowledges with a `0xAC` reply (we ignore the ack – we just
-     * needed to make sure the cube is in a known gyro-on state).
-     * Called by the connection orchestrator after the post-connect
-     * handshake to ensure gyro is on regardless of whatever state a
-     * previous client session left the cube in.
+     * Post-connect handshake: the documented init sequence, then the
+     * gyro enable, then one more state request.
+     *
+     * The three requests (0xA1 hardware, 0xA3 facelets, 0xA4 battery)
+     * go out **twice** before the gyro enable. That doubled burst is a
+     * documented workaround from poliva/smartcube-web-bluetooth: some
+     * cheap V10 variants ignore the first round entirely and never
+     * start streaming at all unless the sequence is repeated. On
+     * hardware that does not need it the extra round is harmless — the
+     * cube simply answers each request twice, and every consumer of
+     * [SmartCubeEvent.Hardware], [SmartCubeEvent.Facelets] and
+     * [SmartCubeEvent.Battery] already treats them as upserts.
+     *
+     * The requests are issued through [ProtocolIo.send] so they reuse
+     * the very same 20-byte encodings [buildCommand] produces; there is
+     * no second copy of the wire format here to drift out of sync.
      */
-    suspend fun enableGyro() {
-        val t = transport ?: return
-        val e = encryptor ?: return
-        val payload = ByteArray(20).apply {
-            this[0] = MSG_GYRO_CONFIG.toByte()
-            this[2] = 0x01  // 1 = enable; 0 = disable
-        }
-        runCatching { t.write(e.encrypt(payload)) }
-            .onFailure { log.w(it) { "enableGyro failed" } }
-    }
-
-    override suspend fun disconnect() {
-        ingestJob?.cancel()
-        ingestJob = null
-        transport = null
-        encryptor = null
-        resetParserState()
-    }
-
-    private fun resetParserState() {
-        lastSerial = -1
-        lastMoveTimestamp = 0
-        cubeTimestamp = 0
+    override suspend fun onConnected(io: ProtocolIo) {
+        io.send(SmartCubeCommand.RequestHardware)   // 0xA1 = 161
+        io.send(SmartCubeCommand.RequestFacelets)   // 0xA3 = 163
+        io.send(SmartCubeCommand.RequestBattery)    // 0xA4 = 164
+        // Documented workaround — see the KDoc above. Not a copy-paste
+        // slip: variants exist that otherwise never begin notifying.
+        io.send(SmartCubeCommand.RequestHardware)
+        io.send(SmartCubeCommand.RequestFacelets)
+        io.send(SmartCubeCommand.RequestBattery)
+        // 0xAC = 172 gyro config: byte 2 is the on/off flag. The cube
+        // acknowledges with its own 0xAC, which [decode] ignores — we
+        // only needed to put the cube in a known gyro-on state.
+        io.writePlain(
+            ByteArray(20).apply {
+                this[0] = MSG_GYRO_CONFIG.toByte()
+                this[2] = 0x01  // 1 = enable; 0 = disable
+            },
+        )
+        // Re-ask for state last: enabling the gyro is the point at
+        // which a sulking variant finally starts answering.
+        io.send(SmartCubeCommand.RequestFacelets)
     }
 
     // ---------------------------------------------------------------
     // Wire encoding / decoding
     // ---------------------------------------------------------------
 
-    private fun buildCommand(cmd: SmartCubeCommand): ByteArray? = when (cmd) {
+    override fun buildCommand(cmd: SmartCubeCommand): ByteArray? = when (cmd) {
         SmartCubeCommand.RequestFacelets -> ByteArray(20).apply { this[0] = MSG_CUBE_STATUS.toByte() }
         SmartCubeCommand.RequestHardware -> ByteArray(20).apply { this[0] = MSG_CUBE_INFO.toByte() }
         SmartCubeCommand.RequestBattery -> ByteArray(20).apply { this[0] = MSG_CUBE_POWER.toByte() }
@@ -196,20 +146,19 @@ class MoyuCubeDriver(
         is SmartCubeCommand.RequestMoveHistory -> null
     }
 
-    private fun parsePacket(message: ByteArray): List<SmartCubeEvent> {
-        if (message.isEmpty()) return emptyList()
+    override suspend fun decode(packet: ByteArray, io: ProtocolIo): List<SmartCubeEvent> {
+        if (packet.isEmpty()) return emptyList()
         val ts = currentTimeMillis()
-        return when (val type = message[0].toInt() and 0xFF) {
-            MSG_CUBE_INFO -> parseCubeInfo(message, ts)
-            MSG_CUBE_STATUS -> parseFacelets(message, ts)
-            MSG_CUBE_POWER -> parseBattery(message, ts)
-            MSG_CUBE_MOVE -> parseMove(message, ts)
-            MSG_GYROSCOPE -> parseGyro(message, ts)
+        return when (packet[0].toInt() and 0xFF) {
+            MSG_CUBE_INFO -> parseCubeInfo(packet, ts)
+            MSG_CUBE_STATUS -> parseFacelets(packet, ts)
+            MSG_CUBE_POWER -> parseBattery(packet, ts)
+            MSG_CUBE_MOVE -> parseMove(packet, ts)
+            MSG_GYROSCOPE -> parseGyro(packet, ts)
             MSG_GYRO_CONFIG -> emptyList()  // ack-only; ignore
-            else -> {
-                log.d { "ignoring unknown MoYu packet type 0x${type.toString(16)}" }
-                emptyList()
-            }
+            // Unknown packet type. The driver already logs an empty
+            // decode result, which is enough to diagnose a new variant.
+            else -> emptyList()
         }
     }
 
@@ -237,6 +186,14 @@ class MoyuCubeDriver(
         // `enabled && functional` – matches GAN's "gyroSupported"
         // semantics (the rest of the app reads this as "can the cube
         // emit useful gyro events").
+        //
+        // This is a real capability read off the wire, not a guess, so
+        // it stays a hard true/false rather than the null that GAN Gen4
+        // and GoCube report from their name heuristics. Note that a
+        // "Lite"/cheap V10 variant with no gyro hardware answers with
+        // `functional = 0` here, so a false from this cube means what
+        // it says; the app still upgrades to true on observing a real
+        // 0xAB packet, so a firmware that lies low costs nothing.
         val v = BitView(message)
         val gyroEnabled = v.word(105, 1) != 0L
         val gyroFunctional = v.word(106, 1) != 0L
@@ -276,11 +233,10 @@ class MoyuCubeDriver(
         val stickers = IntArray(48) { i ->
             v.word(8 + i * 3, 3).toInt()
         }
-        val state = MoyuFaceletDecoder.decode(stickers)
-        if (state == null) {
-            log.w { "Facelets packet did not decode to a valid CubeState; ignoring" }
-            return emptyList()
-        }
+        // A packet that doesn't decode to a valid CubeState is dropped:
+        // resyncing the visualisation to garbage is worse than missing
+        // the resync entirely.
+        val state = MoyuFaceletDecoder.decode(stickers) ?: return emptyList()
         // Anchor lastSerial on every Facelets event (same lesson as
         // GAN Gen2: the cube has encoded all moves up to this serial
         // into the snapshot, so subsequent Move events must diff
@@ -370,33 +326,24 @@ class MoyuCubeDriver(
         // implementation where the signed-shift causes off-by-one;
         // we follow the corrected interpretation per the writeup.
         if (message.size < 17) return emptyList()  // 1 type + 16 data
-        val w = readS32LE(message, 1) / Q30
-        val x = readS32LE(message, 5) / Q30
-        val negZ = readS32LE(message, 9) / Q30
-        val y = readS32LE(message, 13) / Q30
+        val w = message.leInt32(1).toFloat() / Q30
+        val x = message.leInt32(5).toFloat() / Q30
+        val negZ = message.leInt32(9).toFloat() / Q30
+        val y = message.leInt32(13).toFloat() / Q30
         val z = -negZ
         return listOf(
             SmartCubeEvent.Gyro(
-                // Korender's Quaternion is (w, Vec3(x, y, z)); see
-                // gan-parser usage of the same constructor.
-                quat = Quaternion(w, Vec3(x, y, z)),
+                // Measured norm on this cube is exactly 1.0, so the
+                // normalisation is cosmetic here — it is used for
+                // consistency with the other protocols, and because it
+                // returns identity rather than a degenerate all-zero
+                // quaternion from a still-initialising sensor.
+                quat = unitQuaternion(w, x, y, z),
                 // MoYu doesn't report angular velocity – pass zero.
                 angularVel = Vec3(0f, 0f, 0f),
                 deviceTimestamp = ts,
             ),
         )
-    }
-
-    private fun readS32LE(buf: ByteArray, offset: Int): Float {
-        val b0 = buf[offset].toInt() and 0xFF
-        val b1 = buf[offset + 1].toInt() and 0xFF
-        val b2 = buf[offset + 2].toInt() and 0xFF
-        val b3 = buf[offset + 3].toInt() and 0xFF
-        // Assemble big-endian Int (so the resulting Int has the same
-        // numeric value the bytes would form when read as a signed
-        // 32-bit LE integer – the top byte b3 is the sign-bearing one).
-        val asInt = (b3 shl 24) or (b2 shl 16) or (b1 shl 8) or b0
-        return asInt.toFloat()
     }
 
     // ---------------------------------------------------------------
@@ -414,15 +361,14 @@ class MoyuCubeDriver(
 
         /** Floating-point divisor for the 30-bit fixed-point gyro
          *  components. Cast to Float to keep arithmetic in single
-         *  precision; quaternions are normalised downstream by Korender
-         *  for rendering. */
+         *  precision. */
         const val Q30: Float = (1 shl 30).toFloat()
 
         // Message type bytes. Stored as Int (rather than Byte) so the
-        // `when` dispatch in [parsePacket] compares Int-to-Int after
-        // the unsigned-byte conversion of `message[0]`. Where they're
+        // `when` dispatch in [decode] compares Int-to-Int after the
+        // unsigned-byte conversion of `packet[0]`. Where they're
         // assigned into a ByteArray (in [buildCommand] and
-        // [enableGyro]), `.toByte()` does the down-cast at the use
+        // [onConnected]), `.toByte()` does the down-cast at the use
         // site.
         const val MSG_CUBE_INFO: Int = 0xA1
         const val MSG_CUBE_STATUS: Int = 0xA3
@@ -433,26 +379,26 @@ class MoyuCubeDriver(
 
         /** Move-code → (face, cw) table. Codes 0..11 in protocol order:
          *  F, F', B, B', U, U', D, D', L, L', R, R'. */
-        val MOVE_CODE_TABLE: List<MoyuMove> = listOf(
-            MoyuMove(CubeFace.F, cw = true),
-            MoyuMove(CubeFace.F, cw = false),
-            MoyuMove(CubeFace.B, cw = true),
-            MoyuMove(CubeFace.B, cw = false),
-            MoyuMove(CubeFace.U, cw = true),
-            MoyuMove(CubeFace.U, cw = false),
-            MoyuMove(CubeFace.D, cw = true),
-            MoyuMove(CubeFace.D, cw = false),
-            MoyuMove(CubeFace.L, cw = true),
-            MoyuMove(CubeFace.L, cw = false),
-            MoyuMove(CubeFace.R, cw = true),
-            MoyuMove(CubeFace.R, cw = false),
+        val MOVE_CODE_TABLE: List<MoyuWcuMove> = listOf(
+            MoyuWcuMove(CubeFace.F, cw = true),
+            MoyuWcuMove(CubeFace.F, cw = false),
+            MoyuWcuMove(CubeFace.B, cw = true),
+            MoyuWcuMove(CubeFace.B, cw = false),
+            MoyuWcuMove(CubeFace.U, cw = true),
+            MoyuWcuMove(CubeFace.U, cw = false),
+            MoyuWcuMove(CubeFace.D, cw = true),
+            MoyuWcuMove(CubeFace.D, cw = false),
+            MoyuWcuMove(CubeFace.L, cw = true),
+            MoyuWcuMove(CubeFace.L, cw = false),
+            MoyuWcuMove(CubeFace.R, cw = true),
+            MoyuWcuMove(CubeFace.R, cw = false),
         )
     }
 }
 
 /**
- * (face, cw) tuple for the MoYu move-code table. Tiny data class only
- * because the dispatch table is more readable as `MoyuMove(F, true)`
+ * (face, cw) tuple for the WCU move-code table. Tiny data class only
+ * because the dispatch table is more readable as `MoyuWcuMove(F, true)`
  * than as a `Pair<CubeFace, Boolean>`.
  */
-private data class MoyuMove(val face: CubeFace, val cw: Boolean)
+private data class MoyuWcuMove(val face: CubeFace, val cw: Boolean)

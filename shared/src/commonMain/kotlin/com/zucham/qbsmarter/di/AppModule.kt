@@ -12,10 +12,8 @@ import com.zucham.qbsmarter.data.db.UserRepository
 import com.zucham.qbsmarter.data.db.createDatabase
 import com.zucham.qbsmarter.data.profile.ActiveProfile
 import com.zucham.qbsmarter.domain.cube.RubiksCube
-import com.zucham.qbsmarter.domain.driver.CubeDriverFacade
 import com.zucham.qbsmarter.domain.driver.SmartCubeDriver
-import com.zucham.qbsmarter.domain.driver.gan.GanCubeDriver
-import com.zucham.qbsmarter.domain.driver.moyu.MoyuCubeDriver
+import com.zucham.qbsmarter.domain.driver.protocol.ProtocolCubeDriver
 import com.zucham.qbsmarter.ui.i18n.LocaleController
 import com.zucham.qbsmarter.ui.screens.devices.DevicesViewModel
 import com.zucham.qbsmarter.ui.screens.history.HistoryViewModel
@@ -96,26 +94,19 @@ val sharedModule = module {
         )
     }
 
-    // -- Cube model & drivers -------------------------------------------
-    // Each vendor's driver is its own Koin singleton, kept alive across
-    // cube swaps. The [CubeDriverFacade] is the single binding for
-    // [SmartCubeDriver] – it forwards `send` to whichever vendor driver
-    // the [ConnectionOrchestrator] has currently activated and
-    // re-publishes the active driver's events on its own stable
-    // [SharedFlow]. Subscribers ([SolveViewModel], [AppLifecycle]) see a
-    // single events flow regardless of which vendor is in use.
+    // -- Cube model & driver ---------------------------------------------
+    // ONE driver for every vendor and protocol generation. What varies
+    // between cube families lives in a CubeProtocol, selected per
+    // connection from CubeProtocolRegistry by the orchestrator; the
+    // driver itself is a singleton so its events SharedFlow stays stable
+    // across cube swaps and subscribers never re-bind.
     //
-    // [GanCubeDriver] holds Gen2/Gen3/Gen4 parsers internally and
-    // selects one based on the [com.zucham.qbsmarter.domain.driver.gan.GanGeneration]
-    // argument the orchestrator passes at connect time. The MoYu driver
-    // is single-generation (V10 AI today; further models would either
-    // join here or follow the GAN pattern with internal parser
-    // selection).
+    // This replaced a per-vendor driver plus a facade that multiplexed
+    // between them — with a single driver there is nothing left to
+    // multiplex, so the facade is gone too.
     single { RubiksCube() }
-    single { GanCubeDriver(parserDispatcher = Dispatchers.Default) }
-    single { MoyuCubeDriver(parserDispatcher = Dispatchers.Default) }
-    single { CubeDriverFacade(scope = get()) }
-    single<SmartCubeDriver> { get<CubeDriverFacade>() }
+    single { ProtocolCubeDriver(parserDispatcher = Dispatchers.Default) }
+    single<SmartCubeDriver> { get<ProtocolCubeDriver>() }
 
     // -- App lifecycle wiring -------------------------------------------
     single { AppLifecycle(ble = get(), driver = get()) }
@@ -124,9 +115,7 @@ val sharedModule = module {
     single {
         ConnectionOrchestrator(
             ble = get(),
-            ganDriver = get(),
-            moyuDriver = get(),
-            facade = get(),
+            driver = get(),
             devicesRepo = get(),
             scope = get(),
         )

@@ -2,18 +2,11 @@ package com.zucham.qbsmarter.data.ble
 
 import co.touchlab.kermit.Logger
 import com.zucham.qbsmarter.data.db.DevicesRepository
-import com.zucham.qbsmarter.domain.driver.CubeDriverFacade
-import com.zucham.qbsmarter.domain.driver.CubeVendor
 import com.zucham.qbsmarter.domain.driver.SmartCubeCommand
 import com.zucham.qbsmarter.domain.driver.SmartCubeEvent
-import com.zucham.qbsmarter.domain.driver.gan.GanCubeDriver
-import com.zucham.qbsmarter.domain.driver.gan.GanEncryptor
-import com.zucham.qbsmarter.domain.driver.gan.GanGeneration
-import com.zucham.qbsmarter.domain.driver.gan.ganSaltFromMac
-import com.zucham.qbsmarter.domain.driver.moyu.MoyuConstants
-import com.zucham.qbsmarter.domain.driver.moyu.MoyuCubeDriver
-import com.zucham.qbsmarter.domain.driver.moyu.MoyuEncryptor
-import com.zucham.qbsmarter.domain.driver.moyu.moyuSaltFromMac
+import com.zucham.qbsmarter.domain.driver.protocol.CubeIdentity
+import com.zucham.qbsmarter.domain.driver.protocol.CubeProtocolRegistry
+import com.zucham.qbsmarter.domain.driver.protocol.ProtocolCubeDriver
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -43,22 +36,22 @@ import kotlinx.coroutines.withTimeoutOrNull
  * Both have to live longer than any VM, so they share the same scope
  * (the app-wide singleton scope from Koin).
  *
- * **Vendor branching.** Two cube vendors are supported today, each with
- * its own driver implementation: [GanCubeDriver] (covering GAN's three
- * protocol generations Gen2/3/4 internally) and [MoyuCubeDriver]
- * (covering the MoYu WeiLong V10 AI). The orchestrator picks one at
- * connect time by matching the cube's advertised BLE service UUIDs via
- * [CubeVendor.detect]. The choice is recorded both in the [cubes] DB
- * row (via [DevicesRepository.updateVendor]) and, more importantly, on
- * the [CubeDriverFacade] which re-publishes the active driver's events
- * on a single stable [SmartCubeEvent] flow that the rest of the app
- * subscribes to without knowing which vendor is in use.
+ * **Protocol selection is table-driven.** Every supported cube family
+ * is one row in
+ * [com.zucham.qbsmarter.domain.driver.protocol.CubeProtocolRegistry],
+ * carrying its service UUIDs, its encryptor factory (or none, for the
+ * plaintext families) and its protocol factory. The orchestrator matches
+ * the cube's advertised services against that table and hands the
+ * winning row to a single
+ * [com.zucham.qbsmarter.domain.driver.protocol.ProtocolCubeDriver].
+ *
+ * There is deliberately no vendor branch here any more. Adding a brand
+ * changes the registry and nothing in this file — which is the whole
+ * reason the driver layer was unified.
  */
 class ConnectionOrchestrator(
     private val ble: BleManager,
-    private val ganDriver: GanCubeDriver,
-    private val moyuDriver: MoyuCubeDriver,
-    private val facade: CubeDriverFacade,
+    private val driver: ProtocolCubeDriver,
     private val devicesRepo: DevicesRepository,
     private val scope: CoroutineScope,
 ) {
@@ -125,13 +118,11 @@ class ConnectionOrchestrator(
         // Both listeners live forever so they don't miss an event because
         // the user happened to be on a different screen at that moment.
         //
-        // We subscribe to [facade.events] rather than any concrete driver's
-        // events directly. The facade is bound to whichever vendor's driver
-        // is currently active (set in [connect]'s body via
-        // [CubeDriverFacade.bindActiveDriver]), so this listener
-        // automatically sees events from the right vendor without needing
-        // to be re-bound on every cube swap.
-        facade.events
+        // One driver, one events flow, for every vendor and every
+        // protocol generation. This subscription is made once at
+        // construction and never re-bound, because swapping cubes swaps
+        // the driver's *protocol*, not the driver.
+        driver.events
             .onEach { event ->
                 when (event) {
                     is SmartCubeEvent.Hardware -> _activeMac.value?.let { mac ->
@@ -209,7 +200,7 @@ class ConnectionOrchestrator(
                                 "MOVES MISSED (~${event.missedCount}): requesting facelets resync"
                             }
                             scope.launch {
-                                runCatching { facade.send(SmartCubeCommand.RequestFacelets) }
+                                runCatching { driver.send(SmartCubeCommand.RequestFacelets) }
                             }
                         }
                     }
@@ -295,88 +286,74 @@ class ConnectionOrchestrator(
             // job). Doing both keeps the code branch-free at this
             // point – the vendor choice for THIS cube isn't known yet,
             // and the previous cube might have been the other vendor.
-            ganDriver.disconnect()
-            moyuDriver.disconnect()
-            facade.clearActiveDriver()
+            driver.disconnect()
             ble.connectToDevice(device)
 
-            // CRITICAL ordering, five steps:
+            // CRITICAL ordering, four steps:
             //   1. Wait for service discovery – connectGatt() returns
             //      immediately and we can't write before discovery
             //      finishes.
-            //   2. **Detect the cube's vendor** by matching the
-            //      advertised service UUIDs against the known vendors
-            //      via [CubeVendor.detect]. This decides which driver
-            //      (GAN or MoYu) to dispatch to.
-            //   3. Build the vendor-appropriate encryptor and transport.
-            //      GAN and MoYu both use AES-128 CBC with a MAC-derived
-            //      salt, but they have *different* root key/IV pairs;
-            //      [GanEncryptor] and [MoyuEncryptor] are thin factories
-            //      over the shared [AesCbcMacSaltEncryptor]. Transport
-            //      UUIDs come from the matching constants ([GanGeneration]
-            //      for GAN, [MoyuConstants] for MoYu).
-            //   4. Connect the matching driver, bind it on the facade
-            //      so subscribers (including this orchestrator's init
-            //      block) see its events. For GAN, this also passes the
-            //      detected [GanGeneration] so the GAN driver selects
-            //      the right per-generation parser internally.
-            //   5. Wait for the descriptor write to complete
+            //   2. Resolve the protocol from the advertised service
+            //      UUIDs against [CubeProtocolRegistry]. That single
+            //      lookup decides the transport UUIDs, the encryptor and
+            //      the decoder together, so they cannot disagree.
+            //   3. Connect the one driver with that protocol.
+            //   4. Wait for the descriptor write to complete
             //      (notificationsReady) BEFORE issuing INFO/FACELETS/
             //      BATTERY. Without this gate the command writes race
             //      against the descriptor write and the cube either
             //      drops them or replies into a void.
+            val identity = CubeIdentity(mac = device.address, name = device.name)
+
+            // Wait for a service snapshot the registry actually
+            // recognises. Collecting until a match appears (rather than
+            // taking the first snapshot) matters because Android
+            // delivers discovered services incrementally.
             val advertisedServices = run {
                 lateinit var snapshot: List<String>
                 ble.discoveredServices.first { services ->
                     val uuids = services.map { it.uuid }
-                    if (CubeVendor.detect(uuids) != null) {
+                    if (CubeProtocolRegistry.resolve(uuids, identity) != null) {
                         snapshot = uuids
                         true
                     } else false
                 }
                 snapshot
             }
-            val detectedVendor: CubeVendor = CubeVendor.detect(advertisedServices)
-                ?: error("Unreachable – discoveredServices.first guarantees a match")
-            log.d { "Detected vendor $detectedVendor for ${device.address}" }
-            // Stamp the vendor onto the cube row immediately. The
-            // [updateVendor] write is a no-op if the row was already
-            // tagged with the same value (e.g. a reconnect to a
-            // previously-paired cube of the same vendor).
-            devicesRepo.updateVendor(mac = device.address, vendor = detectedVendor)
+            val spec = CubeProtocolRegistry.resolve(advertisedServices, identity)
+                ?: error("Unreachable - discoveredServices.first guarantees a match")
+            log.d { "Resolved protocol ${spec.id} (${spec.vendor}) for ${device.address}" }
 
-            when (detectedVendor) {
-                CubeVendor.GAN -> {
-                    val generation = GanGeneration.detect(advertisedServices)
-                        ?: error("CubeVendor.detect returned GAN but no GanGeneration matched")
-                    log.d { "GAN protocol generation $generation for ${device.address}" }
-                    val encryptor = GanEncryptor(ganSaltFromMac(device.address))
-                    val transport = BleCubeTransport(
-                        ble = ble,
-                        serviceUuid = generation.serviceUuid,
-                        commandCharUuid = generation.commandCharUuid,
-                        stateCharUuid = generation.stateCharUuid,
-                    )
-                    // Bind BEFORE connecting so the facade's forward job
-                    // is collecting from this driver before the first
-                    // event lands. (Drivers buffer 64 events so a brief
-                    // bind-after-connect window wouldn't actually drop
-                    // anything, but bind-first is clearer.)
-                    facade.bindActiveDriver(ganDriver)
-                    ganDriver.connect(transport, encryptor, generation)
-                }
-                CubeVendor.MOYU -> {
-                    val encryptor = MoyuEncryptor(moyuSaltFromMac(device.address))
-                    val transport = BleCubeTransport(
-                        ble = ble,
-                        serviceUuid = MoyuConstants.SERVICE_UUID,
-                        commandCharUuid = MoyuConstants.WRITE_CHAR_UUID,
-                        stateCharUuid = MoyuConstants.NOTIFY_CHAR_UUID,
-                    )
-                    facade.bindActiveDriver(moyuDriver)
-                    moyuDriver.connect(transport, encryptor)
+            if (!spec.supported) {
+                // Recognised, but we have no working driver for it. Say
+                // so plainly rather than silently connecting to a cube
+                // that will never emit an event.
+                log.w {
+                    "Protocol ${spec.id} is recognised but not yet supported; " +
+                        "connection will produce no cube events"
                 }
             }
+
+            // Stamp the vendor onto the cube row immediately, so the
+            // Devices screen labels it correctly long before the
+            // hardware handshake completes. A no-op when unchanged.
+            devicesRepo.updateVendor(mac = device.address, vendor = spec.vendor)
+
+            // Everything below is vendor-agnostic: the registry row
+            // supplies the UUIDs, the encryptor (or null for a
+            // plaintext family) and the protocol instance, and one
+            // driver runs all of them.
+            val transport = BleCubeTransport(
+                ble = ble,
+                serviceUuid = spec.serviceUuid,
+                commandCharUuid = spec.commandCharUuid,
+                stateCharUuid = spec.stateCharUuid,
+            )
+            driver.connect(
+                transport = transport,
+                encryptor = spec.createEncryptor(identity),
+                protocol = spec.createProtocol(identity),
+            )
 
             val ready = withTimeoutOrNull(NOTIFICATIONS_READY_TIMEOUT_MS) {
                 ble.notificationsReady.first { it }
@@ -397,21 +374,11 @@ class ConnectionOrchestrator(
             // cube simply never hears it. Whichever command goes first
             // absorbs that risk.
             delay(FIRST_COMMAND_SETTLE_MS)
-            runCatching { facade.send(SmartCubeCommand.RequestHardware) }
+            runCatching { driver.send(SmartCubeCommand.RequestHardware) }
             delay(POST_CONNECT_GAP_MS)
-            runCatching { facade.send(SmartCubeCommand.RequestFacelets) }
+            runCatching { driver.send(SmartCubeCommand.RequestFacelets) }
             delay(POST_CONNECT_GAP_MS)
-            runCatching { facade.send(SmartCubeCommand.RequestBattery) }
-            // MoYu V10 specifically: ensure gyro is in the known-on
-            // state regardless of whatever the previous client session
-            // (likely the official WCU app) left it in. The cube
-            // remembers the setting across reconnects, so this is the
-            // only point we can reliably re-assert it. The ack is a
-            // 0xAC reply which the driver swallows.
-            if (detectedVendor == CubeVendor.MOYU) {
-                delay(POST_CONNECT_GAP_MS)
-                runCatching { moyuDriver.enableGyro() }
-            }
+            runCatching { driver.send(SmartCubeCommand.RequestBattery) }
 
             ensureHardwareInfo()
         }
@@ -448,7 +415,7 @@ class ConnectionOrchestrator(
             delay(HARDWARE_RETRY_INTERVAL_MS)
             if (hardwareReceived || _activeMac.value == null) return
             log.w { "No hardware info yet; re-requesting (attempt ${attempt + 2})" }
-            runCatching { facade.send(SmartCubeCommand.RequestHardware) }
+            runCatching { driver.send(SmartCubeCommand.RequestHardware) }
         }
         if (!hardwareReceived) {
             log.w {
@@ -486,16 +453,12 @@ class ConnectionOrchestrator(
         scope.launch {
             connectJob?.cancel()
             connectJob = null
-            // Best-effort driver-level cleanup for both vendors. Only one
-            // is realistically active at a time, but both `disconnect()`
-            // implementations are idempotent and cheap when there's
-            // nothing live (transport/encryptor refs are already null,
-            // ingest job is already cancelled). Clearing the facade
-            // ensures any subsequent `send` before the next connect
-            // becomes a no-op rather than reaching a torn-down driver.
-            runCatching { ganDriver.disconnect() }
-            runCatching { moyuDriver.disconnect() }
-            facade.clearActiveDriver()
+            // Best-effort driver cleanup. Idempotent and cheap when
+            // nothing is live: transport, encryptor and protocol refs
+            // are dropped and the ingest job cancelled, so any stray
+            // `send` before the next connect is a no-op rather than a
+            // write into a torn-down connection.
+            runCatching { driver.disconnect() }
             ble.disconnect()
             // Await the BLE stack acknowledging the disconnect. The
             // outer 2 s timeout matches the upstream waits in
@@ -515,8 +478,8 @@ class ConnectionOrchestrator(
     }
 
     private companion object {
-        // BLE service / characteristic UUIDs come from the auto-detected [GanGeneration]
-        // in [connect]. See [GanGeneration] for the per-generation values.
+        // BLE service / characteristic UUIDs come from the resolved
+        // [CubeProtocolRegistry] row in [connect].
 
         const val POST_CONNECT_GAP_MS = 120L
         const val NOTIFICATIONS_READY_TIMEOUT_MS = 3000L

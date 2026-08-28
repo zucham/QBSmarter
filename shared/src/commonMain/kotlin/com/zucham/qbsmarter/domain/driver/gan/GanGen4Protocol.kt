@@ -9,42 +9,51 @@ import com.zucham.qbsmarter.domain.driver.BitView
 import com.zucham.qbsmarter.domain.driver.CubeVendor
 import com.zucham.qbsmarter.domain.driver.SmartCubeCommand
 import com.zucham.qbsmarter.domain.driver.SmartCubeEvent
+import com.zucham.qbsmarter.domain.driver.protocol.CubeProtocol
+import com.zucham.qbsmarter.domain.driver.protocol.GAN_FACE_ORDER
+import com.zucham.qbsmarter.domain.driver.protocol.MoveRecoveryFifo
+import com.zucham.qbsmarter.domain.driver.protocol.ProtocolIo
+import com.zucham.qbsmarter.domain.driver.protocol.ganSignMagnitude
 import com.zucham.qbsmarter.util.currentTimeMillis
 
 /**
- * GAN Gen4 protocol parser. Supported cubes:
+ * GAN Gen4 wire protocol. Supported cubes:
  *   • GAN12 ui Maglev
  *   • GAN14 ui FreePlay
+ *   • GAN i4
  *
- * Gen4 shares Gen3's general philosophy – move-history backfill, FIFO
- * eviction, byte-aligned packets – with these specific differences:
+ * Gen4 shares Gen3's general philosophy – move-history backfill, ordered
+ * FIFO drain, byte-aligned packets – with these specific differences:
  *
  *   • **No leading magic byte.** Where Gen3 prefixes every notification
  *     with 0x55, Gen4 puts the event-type byte at offset 0 directly.
+ *     Every field offset here is therefore Gen3's minus 8 bits.
  *   • **Distinct opcode set.** Commands and events use a different
  *     numeric space (0xDD / 0xDF / 0xD2 / 0xD1 commands; 0x01 / 0xD1 /
  *     0xED / 0xEC / 0xEF / 0xEA / 0xFA-0xFE events).
  *   • **Hardware info split across multiple events.** Gen4 spreads HW/
  *     SW/name/date across 4 separate events (0xFA, 0xFC, 0xFD, 0xFE);
- *     the parser accumulates them and emits a single
- *     [SmartCubeEvent.Hardware] only once all four have been received.
- *   • **Gyro support.** Unlike Gen3, Gen4 supports gyroscope (0xEC
- *     event), but only on hardware named "GAN12uiM"; the [Hardware]
- *     event reports `gyroSupported` accordingly.
+ *     see [hwInfo] for how they are accumulated.
+ *   • **Gyro support.** Unlike Gen3, Gen4 reports orientation (0xEC
+ *     event) on some hardware and not on others, and carries no
+ *     capability bit saying which — see [GEN4_GYRO_HARDWARE_NAMES].
  *
- * The FIFO/backfill mechanism is identical in shape to [GanGen3Parser];
- * only the wire offsets and opcodes differ. We deliberately don't
- * factor the FIFO into a shared base class – the wire-decode methods
- * are tightly coupled to the FIFO state and a base class would obscure
- * the per-generation differences without removing meaningful duplication.
+ * The FIFO/backfill machinery is [MoveRecoveryFifo], shared verbatim
+ * with [GanGen3Protocol]; only the wire offsets and opcodes differ, and
+ * those stay here.
  */
-internal class GanGen4Parser : GanParser {
+internal class GanGen4Protocol : CubeProtocol {
 
-    private var serial: Int = -1
-    private var lastSerial: Int = -1
-    private var lastLocalTimestamp: Long = 0
-    private val moveBuffer: ArrayDeque<SmartCubeEvent.Move> = ArrayDeque()
-    private val moveBufferSerials: ArrayDeque<Int> = ArrayDeque()
+    override val vendor: CubeVendor = CubeVendor.GAN
+
+    override val id: String = "gan-gen4"
+
+    /**
+     * Pending moves plus the serial bookkeeping that orders them. Owns
+     * the rolling serial, the last-emitted serial, and the timestamp of
+     * the last live move packet.
+     */
+    private val fifo = MoveRecoveryFifo()
 
     /**
      * Hardware-info accumulator, keyed by event opcode (0xFA / 0xFC /
@@ -64,22 +73,12 @@ internal class GanGen4Parser : GanParser {
      * copies simply supersede earlier ones.
      *
      * Never cleared mid-connection — not even on a re-issued
-     * [SmartCubeCommand.RequestHardware], which the orchestrator now
-     * sends on a retry loop — so a retry can only add information, never
-     * remove it. [reset] clears it when the connection is torn down, the
-     * one moment the accumulated data stops describing the cube on the
-     * wire.
+     * [SmartCubeCommand.RequestHardware], which the orchestrator sends
+     * on a retry loop — so a retry can only add information, never
+     * remove it. The instance itself is per-connection, so there is
+     * nothing to clear on teardown either.
      */
     private val hwInfo: MutableMap<Int, String> = mutableMapOf()
-
-    override fun reset() {
-        serial = -1
-        lastSerial = -1
-        lastLocalTimestamp = 0
-        moveBuffer.clear()
-        moveBufferSerials.clear()
-        hwInfo.clear()
-    }
 
     override fun buildCommand(cmd: SmartCubeCommand): ByteArray? = when (cmd) {
         SmartCubeCommand.RequestFacelets -> ByteArray(20).also {
@@ -104,7 +103,7 @@ internal class GanGen4Parser : GanParser {
         is SmartCubeCommand.RequestMoveHistory -> buildMoveHistoryCommand(cmd.startSerial, cmd.count)
     }
 
-    /** Mirror of [GanGen3Parser.buildMoveHistoryCommand] with the Gen4 opcode. */
+    /** Mirror of [GanGen3Protocol]'s move-history request with the Gen4 opcode. */
     private fun buildMoveHistoryCommand(startSerial: Int, count: Int): ByteArray {
         val alignedSerial = if (startSerial % 2 == 0) (startSerial - 1) and 0xFF else startSerial
         val alignedCount = if (count % 2 == 1) count + 1 else count
@@ -119,20 +118,20 @@ internal class GanGen4Parser : GanParser {
         }
     }
 
-    override suspend fun parseStatePacket(
-        message: ByteArray,
-        historyRequester: suspend (Int, Int) -> Unit,
-    ): List<SmartCubeEvent> {
+    override suspend fun decode(packet: ByteArray, io: ProtocolIo): List<SmartCubeEvent> {
+        val requestHistory: suspend (Int, Int) -> Unit = { start, count ->
+            io.send(SmartCubeCommand.RequestMoveHistory(start, count))
+        }
         val ts = currentTimeMillis()
-        val msg = BitView(message)
+        val msg = BitView(packet)
 
         val eventType = msg.word(0, 8).toInt()
         val dataLength = msg.word(8, 8).toInt()
 
         return when (eventType) {
-            0x01 -> parseMove(msg, ts, historyRequester)
+            0x01 -> parseMove(msg, ts, requestHistory)
             0xD1 -> parseMoveHistory(msg, ts, dataLength)
-            0xED -> parseFacelets(msg, ts, historyRequester)
+            0xED -> parseFacelets(msg, ts, requestHistory)
             in 0xFA..0xFE -> parseHardwareFragment(msg, ts, eventType, dataLength)
             0xEC -> parseGyro(msg, ts)
             0xEF -> parseBattery(msg, ts, dataLength)
@@ -144,10 +143,10 @@ internal class GanGen4Parser : GanParser {
     private suspend fun parseMove(
         v: BitView,
         ts: Long,
-        historyRequester: suspend (Int, Int) -> Unit,
+        requestHistory: suspend (Int, Int) -> Unit,
     ): List<SmartCubeEvent> {
-        if (lastSerial == -1) return emptyList()
-        lastLocalTimestamp = ts
+        if (fifo.lastSerial == -1) return emptyList()
+        fifo.lastLocalTimestamp = ts
 
         // Same logical layout as Gen3 but shifted by the 8 bits Gen3
         // spent on its 0x55 magic byte. The cube timestamp moves from
@@ -155,25 +154,27 @@ internal class GanGen4Parser : GanParser {
         // (Note: dataLength was already at bit 8 in both formats.)
         val cubeTs = v.wordLE(16, 32)
         val s = v.wordLE(48, 16).toInt() and 0xFF
-        serial = s
+        // Set unconditionally: an unrecognised face mask skips the push
+        // below, and the cube's serial still advanced.
+        fifo.serial = s
         val direction = v.word(64, 2).toInt()
         val faceMask = v.word(66, 6).toInt()
         val faceIdx = GAN_GEN3_4_FACE_ONE_HOT.indexOf(faceMask)
         val face = GAN_FACE_ORDER.getOrNull(faceIdx)
 
         if (face != null) {
-            moveBuffer.addLast(
+            fifo.push(
                 SmartCubeEvent.Move(
                     face = face,
                     cw = direction == 0,
                     cubeTimestamp = cubeTs,
                     deviceTimestamp = ts,
                 ),
+                s,
             )
-            moveBufferSerials.addLast(s)
         }
 
-        return evictMoveBuffer(allowHistoryRequest = true, ts = ts, historyRequester = historyRequester)
+        return fifo.drain(allowHistoryRequest = true, ts = ts, requestHistory = requestHistory)
     }
 
     private suspend fun parseMoveHistory(
@@ -190,7 +191,7 @@ internal class GanGen4Parser : GanParser {
             val faceIdx = GAN_GEN3_4_HISTORY_FACE_ORDER.indexOf(faceMask)
             val face = GAN_FACE_ORDER.getOrNull(faceIdx) ?: continue
             val histSerial = (startSerial - i) and 0xFF
-            injectMissedMoveToBuffer(
+            fifo.injectRecovered(
                 move = SmartCubeEvent.Move(
                     face = face,
                     cw = direction == 0,
@@ -201,22 +202,24 @@ internal class GanGen4Parser : GanParser {
             )
         }
 
-        return evictMoveBuffer(allowHistoryRequest = false, ts = ts, historyRequester = { _, _ -> })
+        return fifo.drain(allowHistoryRequest = false, ts = ts, requestHistory = { _, _ -> })
     }
 
     private suspend fun parseFacelets(
         v: BitView,
         ts: Long,
-        historyRequester: suspend (Int, Int) -> Unit,
+        requestHistory: suspend (Int, Int) -> Unit,
     ): List<SmartCubeEvent> {
         val s = v.wordLE(16, 16).toInt() and 0xFF
-        serial = s
+        fifo.serial = s
 
-        if (lastSerial != -1 && lastLocalTimestamp != 0L && (ts - lastLocalTimestamp) > FACELETS_DEBOUNCE_MS) {
-            checkIfMoveMissed(historyRequester)
+        if (fifo.lastSerial != -1 && fifo.lastLocalTimestamp != 0L &&
+            (ts - fifo.lastLocalTimestamp) > FACELETS_DEBOUNCE_MS
+        ) {
+            fifo.requestMissedIfBehind(requestHistory)
         }
 
-        if (lastSerial == -1) lastSerial = s
+        if (fifo.lastSerial == -1) fifo.lastSerial = s
 
         // Field offsets shifted -8 from Gen3 (no magic byte).
         val cp = IntArray(N_CORNERS)
@@ -258,8 +261,8 @@ internal class GanGen4Parser : GanParser {
      * 0xFA (production date), 0xFC (hardware name), 0xFD (software
      * version), and 0xFE (hardware version) sequentially in response to
      * a single RequestHardware command. Each fragment writes into
-     * [hwInfo]; once all four have arrived we synthesise the unified
-     * [SmartCubeEvent.Hardware] event and clear the accumulator.
+     * [hwInfo] and then re-emits the accumulated [SmartCubeEvent.Hardware]
+     * so far; a fragment that adds nothing new emits nothing.
      */
     private fun parseHardwareFragment(
         v: BitView,
@@ -296,9 +299,6 @@ internal class GanGen4Parser : GanParser {
             }
         }
 
-        // Emit the synthesised event only once we've collected all four
-        // fragments. After emission, clear the accumulator so the next
-        // RequestHardware cycle starts fresh.
         // Nothing new in this packet (a duplicate from a retry, or an
         // opcode in the 0xFA..0xFE range we don't decode) – don't
         // bother the rest of the app with it.
@@ -317,13 +317,9 @@ internal class GanGen4Parser : GanParser {
                 // know" – reporting false here would persist as a hard
                 // "no gyro" and hide the feature on a cube that has it.
                 //
-                // The allow-list is a fast path, not the whole answer.
-                // It holds only names confirmed against real hardware,
-                // and a cube outside it that genuinely has the sensor is
-                // still detected: gyro notifications are unsolicited, so
-                // ConnectionOrchestrator upgrades the cube to
-                // gyro-capable the moment one actually arrives. That
-                // saves us guessing at model names we've never seen.
+                // The allow-list is a fast path, not the whole answer;
+                // see [GEN4_GYRO_HARDWARE_NAMES] for why it is known to
+                // be incomplete and why that is safe.
                 gyroSupported = name?.let { it in GEN4_GYRO_HARDWARE_NAMES },
                 vendor = CubeVendor.GAN,
             ),
@@ -343,10 +339,14 @@ internal class GanGen4Parser : GanParser {
         return listOf(
             SmartCubeEvent.Gyro(
                 quat = Quaternion(
-                    fixSigned(qw, 16),
-                    Vec3(fixSigned(qx, 16), fixSigned(qy, 16), fixSigned(qz, 16)),
+                    ganSignMagnitude(qw, 16),
+                    Vec3(ganSignMagnitude(qx, 16), ganSignMagnitude(qy, 16), ganSignMagnitude(qz, 16)),
                 ),
-                angularVel = Vec3(fixSigned(vx, 4), fixSigned(vy, 4), fixSigned(vz, 4)),
+                angularVel = Vec3(
+                    ganSignMagnitude(vx, 4),
+                    ganSignMagnitude(vy, 4),
+                    ganSignMagnitude(vz, 4),
+                ),
                 deviceTimestamp = ts,
             ),
         )
@@ -363,90 +363,41 @@ internal class GanGen4Parser : GanParser {
         return listOf(SmartCubeEvent.Battery(deviceTimestamp = ts, level = level))
     }
 
-    // ---- FIFO management (mirrors GanGen3Parser) ----------------------
-    // Kept as a duplicate rather than factored to a shared base class
-    // because the surrounding decode methods are tightly coupled to the
-    // FIFO state and extracting them would obscure rather than clarify.
-    // If a Gen5 protocol shows up with the same FIFO semantics, this
-    // will be the moment to factor.
-
-    private suspend fun evictMoveBuffer(
-        allowHistoryRequest: Boolean,
-        ts: Long,
-        historyRequester: suspend (Int, Int) -> Unit,
-    ): List<SmartCubeEvent> {
-        val emitted = mutableListOf<SmartCubeEvent>()
-        while (moveBuffer.isNotEmpty()) {
-            val headSerial = moveBufferSerials.first()
-            val diff = if (lastSerial == -1) 1 else ((headSerial - lastSerial) and 0xFF)
-            if (diff > 1) {
-                if (allowHistoryRequest) historyRequester(headSerial, diff)
-                break
-            }
-            emitted += moveBuffer.removeFirst()
-            moveBufferSerials.removeFirst()
-            lastSerial = headSerial
-        }
-        if (moveBuffer.size > BUFFER_OVERFLOW_LIMIT) {
-            val missed = moveBuffer.size
-            moveBuffer.clear()
-            moveBufferSerials.clear()
-            emitted += SmartCubeEvent.MovesMissed(missedCount = missed, deviceTimestamp = ts)
-        }
-        return emitted
-    }
-
-    private fun injectMissedMoveToBuffer(move: SmartCubeEvent.Move, serialOfMove: Int) {
-        if (moveBuffer.isNotEmpty()) {
-            if (moveBufferSerials.contains(serialOfMove)) return
-            val headSerial = moveBufferSerials.first()
-            if (!isSerialInRange(lastSerial, headSerial, serialOfMove)) return
-            if (serialOfMove == ((headSerial - 1) and 0xFF)) {
-                moveBuffer.addFirst(move)
-                moveBufferSerials.addFirst(serialOfMove)
-            }
-        } else {
-            if (isSerialInRange(lastSerial, serial, serialOfMove, closedEnd = true)) {
-                moveBuffer.addFirst(move)
-                moveBufferSerials.addFirst(serialOfMove)
-            }
-        }
-    }
-
-    private suspend fun checkIfMoveMissed(historyRequester: suspend (Int, Int) -> Unit) {
-        val diff = (serial - lastSerial) and 0xFF
-        if (diff <= 0) return
-        if (serial == 0) return
-        val headSerial = moveBufferSerials.firstOrNull() ?: ((serial + 1) and 0xFF)
-        historyRequester(headSerial, diff + 1)
-    }
-
-    private fun isSerialInRange(
-        start: Int,
-        end: Int,
-        serial: Int,
-        closedStart: Boolean = false,
-        closedEnd: Boolean = false,
-    ): Boolean {
-        val totalSpan = (end - start) and 0xFF
-        val offset = (serial - start) and 0xFF
-        val withinSpan = totalSpan >= offset
-        val notAtStart = closedStart || ((start - serial) and 0xFF) > 0
-        val notAtEnd = closedEnd || ((end - serial) and 0xFF) > 0
-        return withinSpan && notAtStart && notAtEnd
-    }
-
     private fun pad2(n: Int): String = n.toString().padStart(2, '0')
     private fun pad4(n: Int): String = n.toString().padStart(4, '0')
 
     private companion object {
+        /**
+         * Debounce period before a periodic Facelets event triggers a
+         * move-history request. Inside this window the cube is likely
+         * still streaming live MOVE events the FIFO hasn't processed
+         * yet, and asking for them would request moves already in
+         * flight.
+         */
         const val FACELETS_DEBOUNCE_MS = 500L
-        const val BUFFER_OVERFLOW_LIMIT = 16
 
         /**
-         * Gen4 hardware names known to include a gyroscope. The Hardware
-         * event reports `gyroSupported` based on this membership check.
-         * Currently just one model.
+         * Gen4 hardware names confirmed against real hardware to carry a
+         * gyroscope. Membership makes [SmartCubeEvent.Hardware] report
+         * `gyroSupported = true` the moment the name fragment lands,
+         * which is a little earlier than the cube's first orientation
+         * packet would.
+         *
+         * **This list is knowingly incomplete, and must not be read as
+         * the definitive answer.** The GAN i4 is the documented
+         * counter-example: it reports its hardware name as `GANi4`,
+         * is absent from this list, and nonetheless streams 0xEC gyro
+         * packets in verified wire captures. It is deliberately *not*
+         * added — the point of the counter-example is that any
+         * name-based list is a guess about models we have never seen,
+         * and enumerating them is not a solvable problem.
+         *
+         * What makes the omission harmless is that `gyroSupported` is a
+         * `Boolean?` and stays null until the name arrives: a name not
+         * on the list yields false, but gyro notifications are
+         * unsolicited, so `ConnectionOrchestrator` upgrades the cube to
+         * gyro-capable on observing an actual 0xEC packet. The
+         * allow-list only ever buys latency; the wire is the authority.
          */
         val GEN4_GYRO_HARDWARE_NAMES = setOf("GAN12uiM")
     }

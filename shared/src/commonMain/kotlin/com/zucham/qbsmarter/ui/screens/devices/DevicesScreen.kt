@@ -51,6 +51,7 @@ import com.zucham.qbsmarter.data.ble.BleDevice
 import com.zucham.qbsmarter.data.ble.ConnectionState
 import com.zucham.qbsmarter.data.db.PairedCube
 import com.zucham.qbsmarter.domain.driver.CubeVendor
+import com.zucham.qbsmarter.domain.driver.protocol.CubeProtocolRegistry
 import com.zucham.qbsmarter.ui.components.ConfirmationDialog
 import com.zucham.qbsmarter.ui.components.VerticalScrollbarBox
 import com.zucham.qbsmarter.ui.theme.ConnectionDotSize
@@ -714,7 +715,7 @@ private fun DeviceList(devices: List<BleDevice>, onPair: (BleDevice) -> Unit) {
  * available-devices list to sort known cubes to the top and give them
  * the saturated tile plus a vendor chip.
  *
- * All the judgement lives in [CubeVendor.detectFromScan] — advertised
+ * All the judgement lives in [CubeProtocolRegistry.detectVendorFromScan] — advertised
  * service UUIDs first, then device-name prefix, then MAC OUI — so the
  * scan-time answer and the post-connect answer can't drift apart. This
  * screen only decides what to *do* with the result.
@@ -726,7 +727,7 @@ private fun DeviceList(devices: List<BleDevice>, onPair: (BleDevice) -> Unit) {
  * rather than a classification one.
  */
 private fun BleDevice.detectVendor(): CubeVendor? =
-    CubeVendor.detectFromScan(
+    CubeProtocolRegistry.detectVendorFromScan(
         name = name,
         macAddress = address,
         advertisedServices = advertisedServiceUuids,
