@@ -31,6 +31,7 @@ This document captures everything a developer should know to work on QBSmarter p
    - [Record queries and the ranking index](#record-queries-and-the-ranking-index)
    - [Ao5 as a maintained column](#ao5-as-a-maintained-column)
    - [Solve reconstruction: `solve_moves` and `solve_gyro`](#solve-reconstruction-solve_moves-and-solve_gyro)
+   - [SQLDelight single-column queries](#sqldelight-single-column-queries)
    - [Foreign keys](#foreign-keys)
 10. [Permissions, edge-to-edge & system bars](#permissions-edge-to-edge--system-bars)
 11. [Internationalisation](#internationalisation)
@@ -1485,6 +1486,22 @@ Two counter-intuitive results are worth keeping. **The threshold barely matters*
 **Retention.** Move tracks are never pruned; at 1.6 MB per 10,000 solves there is no reason to. `solve_gyro` denormalises `user_id` and `solved_at` from its parent — the one deliberate duplication in this schema — so every retention rule is an indexed DELETE with no join: keep the newest N, drop everything older than a date, drop all of it. `pinned` exempts a track from all of them and is set automatically for a solve holding a record, so no housekeeping can quietly delete the replay of a personal best. `putGyro`'s upsert deliberately does **not** take `pinned` from the excluded row, so re-recording cannot clear a pin.
 
 `pruneGyroKeepingNewest` is phrased as "delete everything not in the newest N" rather than as a cutoff timestamp: an OFFSET is one row off from the count it reads like, and two solves sharing a `solved_at` to the millisecond cannot be separated by a comparison. The subquery names exactly N rows under a total order (`solved_at DESC, solve_id DESC`) and everything else goes.
+
+### SQLDelight single-column queries
+
+The generated shape of a one-column `SELECT` depends on whether that column can
+be null, and getting it wrong is a compile error rather than a runtime surprise:
+
+- **nullable** (`MIN(...)`, a nullable column) → SQLDelight generates a row class
+  so `executeAsOne()` can return a non-null wrapper holding a null value, and
+  distinguish that from "no rows". Read as `.executeAsOne().best`.
+- **non-null** (`COUNT(*)`, `last_insert_rowid()`, a `NOT NULL` column) → no
+  wrapper; `executeAsOne()` yields the value itself.
+
+Two or more columns always produce a row class. `bestDuration` / `bestAo5` take
+the first form and `countForCube` / `countAll` / `lastInsertedId` the second;
+`app_state.selectActiveUserId` is the first form for a plain column rather than
+an aggregate.
 
 ### Foreign keys
 
