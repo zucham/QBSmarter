@@ -6,6 +6,7 @@ import com.zucham.qbsmarter.domain.driver.CubeTransport
 import com.zucham.qbsmarter.domain.driver.SmartCubeCommand
 import com.zucham.qbsmarter.domain.driver.SmartCubeDriver
 import com.zucham.qbsmarter.domain.driver.SmartCubeEvent
+import com.zucham.qbsmarter.util.toHexString
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -118,12 +119,30 @@ class GanCubeDriver(
                         plain,
                         this@GanCubeDriver::historyRequester,
                     )
-                    log.d { "decrypted -> ${events.size} events" }
-                    events.forEach { event ->
-                        log.d { "emit $event" }
-                        _events.tryEmit(event)
+                    if (events.isEmpty()) {
+                        // A packet the parser had nothing to say about.
+                        // Usually benign (an opcode this generation
+                        // doesn't implement), but it is also exactly
+                        // what a mis-detected generation or an
+                        // unhandled firmware revision looks like — and
+                        // silently returning an empty list makes that
+                        // indistinguishable from no traffic at all.
+                        // Logging the bytes turns an unreproducible
+                        // cube into a logcat diagnosis.
+                        log.d { "unhandled $generation packet: ${plain.toHexString()}" }
+                    } else {
+                        events.forEach { event ->
+                            log.d { "emit $event" }
+                            _events.tryEmit(event)
+                        }
                     }
-                }.onFailure { log.e(it) { "Failed to parse GAN packet" } }
+                }.onFailure {
+                    // Previously logged without the payload, which left
+                    // nothing to diagnose from. A short packet throwing
+                    // out of BitView is the likeliest cause, so the size
+                    // is the first thing worth knowing.
+                    log.e(it) { "Failed to parse GAN packet (${raw.size} bytes encrypted)" }
+                }
             }
             log.w { "Driver collect ended" }
         }
