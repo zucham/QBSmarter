@@ -12,6 +12,7 @@ import com.zucham.qbsmarter.data.db.UserRepository
 import com.zucham.qbsmarter.data.db.createDatabase
 import com.zucham.qbsmarter.data.profile.ActiveProfile
 import com.zucham.qbsmarter.domain.cube.RubiksCube
+import com.zucham.qbsmarter.domain.driver.CubeDriverFacade
 import com.zucham.qbsmarter.domain.driver.SmartCubeDriver
 import com.zucham.qbsmarter.domain.driver.gan.GanCubeDriver
 import com.zucham.qbsmarter.ui.i18n.LocaleController
@@ -94,23 +95,23 @@ val sharedModule = module {
         )
     }
 
-    // -- Cube model & driver --------------------------------------------
-    // Both singletons so screen navigation doesn't rebuild them. Per-cube
-    // encryptor flows in via SmartCubeDriver.connect().
+    // -- Cube model & drivers -------------------------------------------
+    // Each vendor's driver is its own Koin singleton, kept alive across
+    // cube swaps. The [CubeDriverFacade] is the single binding for
+    // [SmartCubeDriver] – it forwards `send` to whichever vendor driver
+    // the [ConnectionOrchestrator] has currently activated and
+    // re-publishes the active driver's events on its own stable
+    // [SharedFlow]. Subscribers ([SolveViewModel], [AppLifecycle]) see a
+    // single events flow regardless of which vendor is in use.
     //
-    // GanCubeDriver holds Gen2/Gen3/Gen4 parsers internally and selects
-    // one based on the GanGeneration argument the orchestrator passes
-    // at connect time. The events SharedFlow stays stable across cube
-    // and generation swaps so subscribers (SolveViewModel etc.) never
-    // need to re-bind.
-    //
-    // We bind both the concrete type AND the SmartCubeDriver interface
-    // to the same singleton: the ConnectionOrchestrator needs to call
-    // the generation-aware overload (only on the concrete class), while
-    // SolveViewModel and AppLifecycle treat it as the generic interface.
+    // [GanCubeDriver] holds Gen2/Gen3/Gen4 parsers internally and
+    // selects one based on the [com.zucham.qbsmarter.domain.driver.gan.GanGeneration]
+    // argument the orchestrator passes at connect time. A second vendor
+    // would join here as its own singleton.
     single { RubiksCube() }
     single { GanCubeDriver(parserDispatcher = Dispatchers.Default) }
-    single<SmartCubeDriver> { get<GanCubeDriver>() }
+    single { CubeDriverFacade(scope = get()) }
+    single<SmartCubeDriver> { get<CubeDriverFacade>() }
 
     // -- App lifecycle wiring -------------------------------------------
     single { AppLifecycle(ble = get(), driver = get()) }
@@ -119,7 +120,8 @@ val sharedModule = module {
     single {
         ConnectionOrchestrator(
             ble = get(),
-            driver = get(),
+            ganDriver = get(),
+            facade = get(),
             devicesRepo = get(),
             scope = get(),
         )

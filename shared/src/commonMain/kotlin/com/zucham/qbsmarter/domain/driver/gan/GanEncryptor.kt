@@ -1,28 +1,48 @@
 package com.zucham.qbsmarter.domain.driver.gan
 
+import com.zucham.qbsmarter.domain.driver.AesCbcMacSaltEncryptor
 import com.zucham.qbsmarter.domain.driver.CubeEncryptor
+import com.zucham.qbsmarter.domain.driver.macSaltFromMacAddress
 
 /**
- * GAN Gen2 cube encryptor. The 16-byte AES key and IV are static (reverse-
- * engineered from the official Gan i Carry app); each cube derives a 6-byte
- * salt from its MAC address that's mixed into the first 6 bytes of both.
- * GAN Gen3 and Gen4 both use this same old encryptor.
+ * Per-cube encryptor for GAN smart cubes. AES-128 CBC with a static root
+ * key + IV, mixed with a 6-byte salt derived from the cube's MAC. All
+ * three currently-supported GAN protocol generations (Gen2, Gen3, Gen4)
+ * share the same key/IV/salt scheme – only the wire packet formats and
+ * BLE service UUIDs differ.
  *
- * `expect class` because the AES-CBC implementation is platform-specific:
- * Android uses javax.crypto, iOS uses CommonCrypto, etc. Only the Android
- * actual is real; other platforms throw NotImplementedError.
+ * Thin wrapper over the vendor-agnostic [AesCbcMacSaltEncryptor]; MoYu's
+ * [com.zucham.qbsmarter.domain.driver.moyu.MoyuEncryptor] is the
+ * companion using a different root key/IV.
+ *
+ * Constants are reverse-engineered from the official Gan i Carry app
+ * disassembly and verified across the gan-web-bluetooth project.
  */
-expect class GanEncryptor(salt: ByteArray) : CubeEncryptor {
-    override fun encrypt(data: ByteArray): ByteArray
-    override fun decrypt(data: ByteArray): ByteArray
+class GanEncryptor(salt: ByteArray) : CubeEncryptor {
+
+    private val delegate = AesCbcMacSaltEncryptor(GAN_ROOT_KEY, GAN_ROOT_IV, salt)
+
+    override fun encrypt(data: ByteArray): ByteArray = delegate.encrypt(data)
+    override fun decrypt(data: ByteArray): ByteArray = delegate.decrypt(data)
+
+    private companion object {
+        private val GAN_ROOT_KEY = byteArrayOf(
+            0x01, 0x02, 0x42, 0x28, 0x31, 0x91.toByte(), 0x16, 0x07,
+            0x20, 0x05, 0x18, 0x54, 0x42, 0x11, 0x12, 0x53,
+        )
+        private val GAN_ROOT_IV = byteArrayOf(
+            0x11, 0x03, 0x32, 0x28, 0x21, 0x01, 0x76, 0x27,
+            0x20, 0x95.toByte(), 0x78, 0x14, 0x32, 0x12, 0x02, 0x43,
+        )
+    }
 }
 
 /**
  * Build the per-cube salt from its BLE MAC address. The bytes are
- * reversed because that's what the GAN Gen2 protocol expects.
+ * reversed because that's what the GAN Gen2 protocol expects (and MoYu
+ * inherited the same convention).
+ *
+ * Preserved at the original symbol for source compatibility; delegates
+ * to the vendor-agnostic helper.
  */
-fun ganSaltFromMac(mac: String): ByteArray =
-    mac.split(':')
-        .map { it.toInt(16).toByte() }
-        .toByteArray()
-        .reversedArray()
+fun ganSaltFromMac(mac: String): ByteArray = macSaltFromMacAddress(mac)

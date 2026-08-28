@@ -6,6 +6,8 @@ import com.zucham.qbsmarter.domain.cube.CubeFace
 import com.zucham.qbsmarter.domain.cube.CubeState
 import com.zucham.qbsmarter.domain.cube.N_CORNERS
 import com.zucham.qbsmarter.domain.cube.N_EDGES
+import com.zucham.qbsmarter.domain.driver.BitView
+import com.zucham.qbsmarter.domain.driver.CubeVendor
 import com.zucham.qbsmarter.domain.driver.SmartCubeCommand
 import com.zucham.qbsmarter.domain.driver.SmartCubeEvent
 import com.zucham.qbsmarter.util.currentTimeMillis
@@ -202,6 +204,7 @@ internal class GanGen2Parser : GanParser {
                 hwVersion = "$hwMajor.$hwMinor",
                 swVersion = "$swMajor.$swMinor",
                 gyroSupported = gyroSup,
+                vendor = CubeVendor.GAN,
             ),
         )
     }

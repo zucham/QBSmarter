@@ -4,6 +4,7 @@ import app.cash.sqldelight.coroutines.asFlow
 import app.cash.sqldelight.coroutines.mapToList
 import com.zucham.qbsmarter.db.Cubes
 import com.zucham.qbsmarter.db.QbsmarterDatabase
+import com.zucham.qbsmarter.domain.driver.CubeVendor
 import com.zucham.qbsmarter.util.currentTimeMillis
 import com.zucham.qbsmarter.util.generateUuid
 import kotlinx.coroutines.CoroutineDispatcher
@@ -17,6 +18,15 @@ import kotlinx.coroutines.flow.map
  * [swVersion], [gyroSupported]) are nullable because they're populated only
  * after the cube's INFO round-trip completes. Pre-pairing or for a non-GAN
  * cube, they stay null.
+ *
+ * [vendor] is the detected manufacturer-protocol family for this cube
+ * (see [CubeVendor]). Populated by the connection orchestrator as soon
+ * as BLE service discovery completes – well before the INFO round-trip –
+ * and never null in practice for any cube the orchestrator has
+ * successfully reached the service-discovery stage with. Defaults to
+ * [CubeVendor.GAN] for rows created before this field existed
+ * (the schema's `DEFAULT 'gan'` covers the SQL side; this enum value
+ * matches it so they round-trip without surprise).
  */
 data class PairedCube(
     val id: String,
@@ -27,6 +37,7 @@ data class PairedCube(
     val hwVersion: String?,
     val swVersion: String?,
     val gyroSupported: Boolean?,
+    val vendor: CubeVendor,
 )
 
 private fun Cubes.toModel() = PairedCube(
@@ -38,6 +49,7 @@ private fun Cubes.toModel() = PairedCube(
     hwVersion = hw_version,
     swVersion = sw_version,
     gyroSupported = gyro_supported?.let { it != 0L },
+    vendor = CubeVendor.fromKey(vendor),
 )
 
 class DevicesRepository(
@@ -66,6 +78,11 @@ class DevicesRepository(
             lastSeen = now, userId = userId,
             hwVersion = existing?.hw_version, swVersion = existing?.sw_version,
             gyroSupported = existing?.gyro_supported?.let { it != 0L },
+            // New rows take the schema default (GAN). Existing rows carry
+            // whatever was previously stamped, which the orchestrator may
+            // immediately overwrite via [updateVendor] once service
+            // discovery confirms the vendor.
+            vendor = CubeVendor.fromKey(existing?.vendor),
         )
     }
 
@@ -102,6 +119,17 @@ class DevicesRepository(
      */
     fun markGyroSupported(mac: String) {
         db.cubesQueries.markGyroSupported(mac)
+    }
+
+    /**
+     * Stamp the detected vendor onto an already-paired cube. Called by
+     * [com.zucham.qbsmarter.data.ble.ConnectionOrchestrator] right after
+     * BLE service discovery picks a [CubeVendor]. The vendor never
+     * changes for a given physical cube; this is one write per pair
+     * (or per re-pair under a different profile).
+     */
+    fun updateVendor(mac: String, vendor: CubeVendor) {
+        db.cubesQueries.updateVendor(vendor = vendor.key, mac = mac)
     }
 
     fun forget(id: String) = db.cubesQueries.deleteById(id)

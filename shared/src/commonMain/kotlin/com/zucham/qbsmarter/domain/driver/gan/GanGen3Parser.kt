@@ -3,6 +3,8 @@ package com.zucham.qbsmarter.domain.driver.gan
 import com.zucham.qbsmarter.domain.cube.CubeState
 import com.zucham.qbsmarter.domain.cube.N_CORNERS
 import com.zucham.qbsmarter.domain.cube.N_EDGES
+import com.zucham.qbsmarter.domain.driver.BitView
+import com.zucham.qbsmarter.domain.driver.CubeVendor
 import com.zucham.qbsmarter.domain.driver.SmartCubeCommand
 import com.zucham.qbsmarter.domain.driver.SmartCubeEvent
 import com.zucham.qbsmarter.util.currentTimeMillis
@@ -294,6 +296,7 @@ internal class GanGen3Parser : GanParser {
                 swVersion = "$swMajor.$swMinor",
                 // Gen3 hardware (i Carry 2) has no gyro sensor.
                 gyroSupported = false,
+                vendor = CubeVendor.GAN,
             ),
         )
     }

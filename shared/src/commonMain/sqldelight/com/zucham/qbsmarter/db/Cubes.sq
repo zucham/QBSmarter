@@ -5,6 +5,12 @@
 --
 -- gyro_supported is INTEGER for SQLite-correctness (0/1/NULL); the
 -- repository maps to Boolean? at the model boundary.
+--
+-- vendor is the persisted form of [CubeVendor]: lowercase ASCII key
+-- ('gan' / 'moyu'). Default 'gan' covers any new rows inserted before
+-- the vendor is known – the connection orchestrator stamps the real
+-- value once service discovery completes. Not nullable so the
+-- repository can map directly without an Elvis chain.
 
 CREATE TABLE cubes (
     id TEXT NOT NULL PRIMARY KEY,
@@ -14,7 +20,8 @@ CREATE TABLE cubes (
     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     hw_version TEXT,
     sw_version TEXT,
-    gyro_supported INTEGER  -- 0 = no, 1 = yes, NULL = unknown (pre-INFO)
+    gyro_supported INTEGER,  -- 0 = no, 1 = yes, NULL = unknown (pre-INFO)
+    vendor TEXT NOT NULL DEFAULT 'gan'  -- CubeVendor.key; default before detection
 );
 
 CREATE INDEX cubes_user_id ON cubes(user_id);
@@ -35,6 +42,12 @@ SELECT * FROM cubes WHERE mac = :mac;
 -- return it and the cube is invisible in B's Paired list. (The id is
 -- preserved on conflict so any in-memory references to the row stay
 -- valid.)
+--
+-- vendor is NOT touched on conflict: a re-pair of the same physical
+-- cube under a different profile keeps whatever vendor was previously
+-- detected for that MAC, and the connection orchestrator will
+-- overwrite it via [updateVendor] if the post-handshake detection
+-- disagrees.
 upsert:
 INSERT INTO cubes (id, mac, name, last_seen, user_id)
 VALUES (:id, :mac, :name, :lastSeen, :userId)
@@ -62,6 +75,14 @@ WHERE mac = :mac;
 -- the hardware handshake never completes at all.
 markGyroSupported:
 UPDATE cubes SET gyro_supported = 1 WHERE mac = :mac;
+
+-- Stamp the detected vendor onto an already-paired cube. Called by the
+-- connection orchestrator immediately after service-UUID inspection,
+-- well before the INFO round-trip completes – the vendor is known the
+-- moment we pick which driver to dispatch to, and the value never
+-- changes for a given cube across reconnects.
+updateVendor:
+UPDATE cubes SET vendor = :vendor WHERE mac = :mac;
 
 deleteById:
 DELETE FROM cubes WHERE id = :id;

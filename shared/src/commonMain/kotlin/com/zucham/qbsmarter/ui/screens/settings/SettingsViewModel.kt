@@ -12,6 +12,7 @@ import com.zucham.qbsmarter.data.db.SolveRow
 import com.zucham.qbsmarter.data.db.SolvesRepository
 import com.zucham.qbsmarter.data.db.UserRepository
 import com.zucham.qbsmarter.data.profile.ActiveProfile
+import com.zucham.qbsmarter.domain.driver.CubeVendor
 import com.zucham.qbsmarter.domain.user.UserProfile
 import com.zucham.qbsmarter.ui.i18n.AppLanguage
 import com.zucham.qbsmarter.ui.i18n.LocaleController
@@ -373,6 +374,14 @@ class SettingsViewModel(
                         gyroSupported = cube.gyroSupported,
                     )
                 }
+                // Stamp the vendor onto the freshly-remembered row.
+                // [CubeVendor.fromKey] defaults unknown strings to GAN,
+                // which also matches older v1 bundles that pre-date the
+                // vendor field (they parse with the default "gan").
+                devicesRepo.updateVendor(
+                    mac = cube.mac,
+                    vendor = CubeVendor.fromKey(cube.vendor),
+                )
             }
 
             // Solves: append with full-field dedup. Snapshot the existing
@@ -445,6 +454,7 @@ class SettingsViewModel(
         mac = cube.mac, name = cube.name, lastSeen = cube.lastSeen,
         hwVersion = cube.hwVersion, swVersion = cube.swVersion,
         gyroSupported = cube.gyroSupported,
+        vendor = cube.vendor.key,
     )
 
     private companion object {
@@ -533,6 +543,12 @@ data class ExportCube(
     val hwVersion: String?,
     val swVersion: String?,
     val gyroSupported: Boolean?,
+    // Defaulted to "gan" so older v1 bundles (created before the vendor
+    // column landed) parse unchanged: kotlinx.serialization treats a
+    // missing JSON field as the default, which matches the SQL column
+    // default. The value is the lowercase [CubeVendor.key]; unknown
+    // strings parse back to GAN via [CubeVendor.fromKey] on import.
+    val vendor: String = "gan",
 )
 
 /**

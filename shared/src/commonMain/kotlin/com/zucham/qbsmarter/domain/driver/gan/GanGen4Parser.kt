@@ -5,6 +5,8 @@ import com.zakgof.korender.math.Vec3
 import com.zucham.qbsmarter.domain.cube.CubeState
 import com.zucham.qbsmarter.domain.cube.N_CORNERS
 import com.zucham.qbsmarter.domain.cube.N_EDGES
+import com.zucham.qbsmarter.domain.driver.BitView
+import com.zucham.qbsmarter.domain.driver.CubeVendor
 import com.zucham.qbsmarter.domain.driver.SmartCubeCommand
 import com.zucham.qbsmarter.domain.driver.SmartCubeEvent
 import com.zucham.qbsmarter.util.currentTimeMillis
@@ -45,11 +47,28 @@ internal class GanGen4Parser : GanParser {
     private val moveBufferSerials: ArrayDeque<Int> = ArrayDeque()
 
     /**
-     * Hardware-info accumulator. Keyed by event opcode (0xFA / 0xFC /
-     * 0xFD / 0xFE); the parser emits a [SmartCubeEvent.Hardware] event
-     * exactly once all four have been received. Cleared on
-     * [RequestHardware] so a fresh request doesn't conflate stale
-     * fragments with new ones.
+     * Hardware-info accumulator, keyed by event opcode (0xFA / 0xFC /
+     * 0xFD / 0xFE).
+     *
+     * A [SmartCubeEvent.Hardware] is raised as **each** fragment lands,
+     * carrying everything known so far. The upstream reference instead
+     * waits for all four and emits once, which means a single dropped
+     * notification loses the hardware info for the whole session — no
+     * retry, no timeout. In practice that surfaces as a gyro-capable
+     * cube reporting its gyro support as "unknown" forever: the flag
+     * rides on the hardware name, and the name never completed the set.
+     *
+     * Emitting incrementally makes a dropped fragment cost only that
+     * fragment's own field. Consumers already treat the event as an
+     * upsert (see [SmartCubeEvent.Hardware]), so later, more complete
+     * copies simply supersede earlier ones.
+     *
+     * Never cleared mid-connection — not even on a re-issued
+     * [SmartCubeCommand.RequestHardware], which the orchestrator now
+     * sends on a retry loop — so a retry can only add information, never
+     * remove it. [reset] clears it when the connection is torn down, the
+     * one moment the accumulated data stops describing the cube on the
+     * wire.
      */
     private val hwInfo: MutableMap<Int, String> = mutableMapOf()
 
@@ -67,13 +86,11 @@ internal class GanGen4Parser : GanParser {
             it[0] = 0xDD.toByte(); it[1] = 0x04; it[2] = 0x00; it[3] = 0xED.toByte()
             it[4] = 0x00; it[5] = 0x00
         }
-        SmartCubeCommand.RequestHardware -> {
-            // RequestHardware is also the moment we reset the
-            // accumulator – starting a fresh quartet of fragments.
-            hwInfo.clear()
-            ByteArray(20).also {
-                it[0] = 0xDF.toByte(); it[1] = 0x03; it[2] = 0x00; it[3] = 0x00; it[4] = 0x00
-            }
+        // The accumulator is deliberately NOT cleared here – see
+        // [hwInfo]. A re-request is a chance to fill gaps, not a reason
+        // to throw away fragments that already arrived.
+        SmartCubeCommand.RequestHardware -> ByteArray(20).also {
+            it[0] = 0xDF.toByte(); it[1] = 0x03; it[2] = 0x00; it[3] = 0x00; it[4] = 0x00
         }
         SmartCubeCommand.RequestBattery -> ByteArray(20).also {
             it[0] = 0xDD.toByte(); it[1] = 0x04; it[2] = 0x00; it[3] = 0xEF.toByte()
@@ -250,6 +267,7 @@ internal class GanGen4Parser : GanParser {
         eventType: Int,
         dataLength: Int,
     ): List<SmartCubeEvent> {
+        val before = hwInfo[eventType]
         when (eventType) {
             0xFA -> {
                 // Production date: year (LE u16), month (u8), day (u8).
@@ -281,23 +299,35 @@ internal class GanGen4Parser : GanParser {
         // Emit the synthesised event only once we've collected all four
         // fragments. After emission, clear the accumulator so the next
         // RequestHardware cycle starts fresh.
-        if (hwInfo.size == 4) {
-            val name = hwInfo[0xFC] ?: ""
-            val event = SmartCubeEvent.Hardware(
+        // Nothing new in this packet (a duplicate from a retry, or an
+        // opcode in the 0xFA..0xFE range we don't decode) – don't
+        // bother the rest of the app with it.
+        if (hwInfo[eventType] == before) return emptyList()
+
+        val name = hwInfo[0xFC]
+        return listOf(
+            SmartCubeEvent.Hardware(
                 deviceTimestamp = ts,
-                name = name,
+                name = name ?: "",
                 hwVersion = hwInfo[0xFE] ?: "",
                 swVersion = hwInfo[0xFD] ?: "",
-                // Only specific Gen4 cube
-                // models include a gyroscope. The current known list is
-                // just GAN12uiM (the GAN12 ui Maglev). Add others here
-                // as they're identified.
-                gyroSupported = name in GEN4_GYRO_HARDWARE_NAMES,
-            )
-            hwInfo.clear()
-            return listOf(event)
-        }
-        return emptyList()
+                // Gen4 carries no gyro capability bit the way Gen2 does;
+                // support is inferred from the hardware name. Until the
+                // name fragment arrives the honest answer is "don't
+                // know" – reporting false here would persist as a hard
+                // "no gyro" and hide the feature on a cube that has it.
+                //
+                // The allow-list is a fast path, not the whole answer.
+                // It holds only names confirmed against real hardware,
+                // and a cube outside it that genuinely has the sensor is
+                // still detected: gyro notifications are unsolicited, so
+                // ConnectionOrchestrator upgrades the cube to
+                // gyro-capable the moment one actually arrives. That
+                // saves us guessing at model names we've never seen.
+                gyroSupported = name?.let { it in GEN4_GYRO_HARDWARE_NAMES },
+                vendor = CubeVendor.GAN,
+            ),
+        )
     }
 
     private fun parseGyro(v: BitView, ts: Long): List<SmartCubeEvent> {

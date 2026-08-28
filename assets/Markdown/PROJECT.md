@@ -1112,7 +1112,7 @@ created_at                                           name                      s
                                                      hw_version                ao5_ms
                                                      sw_version                fluency
                                                      gyro_supported            extras
-                                                                               is_dnf
+                                                     vendor (default 'gan')    is_dnf
                                                                                penalty_ms
                                                                                move_count
 ```
@@ -1120,6 +1120,7 @@ created_at                                           name                      s
 - `app_state` is a single-row pattern: PK is constant 0 (`CHECK (id = 0)`), so it can hold at most one row. `INSERT OR IGNORE` bootstraps; `UPDATE` mutates.
 - All three child tables (`cubes`, `solves`, `settings`) reference `users(id) ON DELETE CASCADE`. `app_state.active_user_id` is `ON DELETE SET NULL`.
 - `cubes.upsert` updates `user_id` on conflict – critical for multi-profile flows: a cube paired under profile A and re-paired under B must transfer ownership; otherwise `selectByUser(B)` won't return it and the cube is invisible in B's Paired list.
+- `cubes.vendor` is the persisted form of `CubeVendor` (`'gan'` / `'moyu'`), `NOT NULL DEFAULT 'gan'`. Stamped by the orchestrator via `updateVendor(mac, vendor)` right after service-UUID-based detection, well before the INFO round-trip lands. The `'gan'` default covers the brief pre-detection window for newly-paired rows and any pre-feature exports (which deserialise as `vendor = "gan"` by default).
 - `solves` indexes: `(user_id, solved_at DESC)` and `(user_id, duration_ms ASC)`. Both used by the History sort modes.
 - `solves.bestDuration` returns `MIN(duration_ms + penalty_ms)` skipping DNFs. Aliased `AS best` so the generated row class has a stable Kotlin property name.
 - `solves.move_count` (default 0) is the total cube turns recorded during the solve. Already counted at runtime by `SolveViewModel` for the live TPS calculation (`fluency = moveCount * 1000 / durationMs`); persisting it lets the History detail dialog show "Turns: N" alongside the time. **Not consumed by any stat** – it's a History-only field by product spec. The 0 default keeps the column SQL-compatible with old call sites (e.g. tests that insert via the repo without the new arg) and lets the History dialog hide the row for pre-feature data via a `> 0` guard.

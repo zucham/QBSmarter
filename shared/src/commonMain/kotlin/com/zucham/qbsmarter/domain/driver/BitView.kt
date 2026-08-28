@@ -1,18 +1,22 @@
-package com.zucham.qbsmarter.domain.driver.gan
+package com.zucham.qbsmarter.domain.driver
 
 /**
- * Bit-level view of a GAN packet. Storing the bits as a binary string is
- * wasteful but simple, target-portable, and not on the hot path (one
- * packet per ~16 ms at most). Reads are 1..32 bits wide.
+ * Bit-level view of a smart-cube wire packet. Storing the bits as a
+ * binary string is wasteful but simple, target-portable, and not on the
+ * hot path (one packet per ~16 ms at most). Reads are 1..32 bits wide.
  *
  * Big-endian by default for [word]; for [wordLE] the bytes within a
  * 16/32-bit field are reversed at decode time, matching the
  * `getBitWord(..., true)` little-endian variant in the upstream
- * gan-web-bluetooth implementation. Gen2 packs everything big-endian;
- * Gen3 and Gen4 mix in little-endian fields for cube timestamps and
- * 16-bit serial numbers.
+ * gan-web-bluetooth implementation. GAN Gen2 packs everything
+ * big-endian; GAN Gen3 and Gen4 mix in little-endian fields for cube
+ * timestamps and 16-bit serial numbers; MoYu V10 AI is mostly big-
+ * endian as well but reads single 32-bit little-endian gyro components
+ * outside this utility (in the MoYu driver directly, since [wordLE]
+ * is unsigned and the gyro fields are signed).
  *
- * Shared across all GAN parser generations.
+ * Shared across all smart-cube parsers (GAN's per-generation parsers
+ * and MoYu's single-generation driver).
  */
 internal class BitView(message: ByteArray) {
     private val bits: String = buildString(message.size * 8) {
