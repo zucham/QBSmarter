@@ -7,6 +7,7 @@ import com.zucham.qbsmarter.domain.driver.gan.GanGen2Protocol
 import com.zucham.qbsmarter.domain.driver.gan.GanGen3Protocol
 import com.zucham.qbsmarter.domain.driver.gan.GanGen4Protocol
 import com.zucham.qbsmarter.domain.driver.gan.ganEncryptorFor
+import com.zucham.qbsmarter.domain.driver.giiker.GiikerProtocol
 import com.zucham.qbsmarter.domain.driver.gocube.GoCubeProtocol
 import com.zucham.qbsmarter.domain.driver.moyu.MoyuMhcProtocol
 import com.zucham.qbsmarter.domain.driver.moyu.MoyuWcuProtocol
@@ -188,6 +189,19 @@ object CubeProtocolRegistry {
             stateCharUuid = "6e400003-b5a3-f393-e0a9-e50e24dcca9e",
             namePrefixes = listOf("Rubiks", "Rubik"),
             createProtocol = { GoCubeProtocol(CubeVendor.RUBIKS, it) },
+        ),
+
+        // -- Giiker ------------------------------------------------------
+        // Plaintext-or-lightly-obfuscated, and the only family whose
+        // battery lives on a second service.
+        CubeProtocolSpec(
+            id = "giiker",
+            vendor = CubeVendor.GIIKER,
+            serviceUuid = "0000aadb$BT_BASE",
+            commandCharUuid = "0000aadc$BT_BASE",
+            stateCharUuid = "0000aadc$BT_BASE",
+            namePrefixes = listOf("Gi", "Mi Smart Magic Cube", "Hi-"),
+            createProtocol = { GiikerProtocol() },
         ),
 
         // -- GAN Gen1 ----------------------------------------------------

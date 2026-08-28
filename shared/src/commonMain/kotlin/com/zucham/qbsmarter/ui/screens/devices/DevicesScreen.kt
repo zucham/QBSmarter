@@ -60,6 +60,7 @@ import org.jetbrains.compose.resources.stringResource
 import org.koin.compose.viewmodel.koinViewModel
 import qbsmarter.shared.generated.resources.Res
 import qbsmarter.shared.generated.resources.device_vendor_gan
+import qbsmarter.shared.generated.resources.device_vendor_giiker
 import qbsmarter.shared.generated.resources.device_vendor_gocube
 import qbsmarter.shared.generated.resources.device_vendor_moyu
 import qbsmarter.shared.generated.resources.device_vendor_qiyi
@@ -749,6 +750,7 @@ private fun CubeVendor.labelRes() = when (this) {
     CubeVendor.QIYI -> Res.string.device_vendor_qiyi
     CubeVendor.GOCUBE -> Res.string.device_vendor_gocube
     CubeVendor.RUBIKS -> Res.string.device_vendor_rubiks
+    CubeVendor.GIIKER -> Res.string.device_vendor_giiker
 }
 
 /**

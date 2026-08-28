@@ -64,6 +64,7 @@
     <string name="device_vendor_qiyi">QiYi</string>
     <string name="device_vendor_gocube">GoCube</string>
     <string name="device_vendor_rubiks">Rubik\'s</string>
+    <string name="device_vendor_giiker">GiiKER</string>
     <string name="devices_no_permissions">Pro vyhledávání a spárování kostek je potřeba aplikaci povolit oprávnění na používání Bluetooth.</string>
     <string name="devices_bt_disabled">Bluetooth je vypnutý. Zapněte ho pro vyhledávání a spárování kostek.</string>
     <string name="devices_bt_enable">Zapnout Bluetooth</string>

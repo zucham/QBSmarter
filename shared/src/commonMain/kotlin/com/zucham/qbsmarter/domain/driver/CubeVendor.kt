@@ -19,7 +19,8 @@ enum class CubeVendor(val key: String) {
     MOYU("moyu"),
     QIYI("qiyi"),
     GOCUBE("gocube"),
-    RUBIKS("rubiks");
+    RUBIKS("rubiks"),
+    GIIKER("giiker");
 
     companion object {
         /**
