@@ -35,7 +35,6 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
@@ -62,6 +61,8 @@ import androidx.compose.ui.unit.sp
 import com.zucham.qbsmarter.data.db.SolveRow
 import com.zucham.qbsmarter.domain.cube.CubeMove
 import com.zucham.qbsmarter.domain.cube.isApproximatelyIdentity
+import com.zucham.qbsmarter.ui.components.DialogButton
+import com.zucham.qbsmarter.ui.components.DialogButtonEmphasis
 import com.zucham.qbsmarter.ui.screens.solve.stats.SolveSession
 import com.zucham.qbsmarter.ui.screens.solve.stats.StatRegistry
 import com.zucham.qbsmarter.util.formatDuration
@@ -1149,13 +1150,11 @@ private fun PbDialog(durationMs: Long, onDismiss: () -> Unit) {
             }
         },
         confirmButton = {
-            TextButton(onClick = onDismiss) {
-                Text(
-                    stringResource(Res.string.solve_pb_dismiss),
-                    color = MaterialTheme.colorScheme.primary,
-                    fontWeight = FontWeight.Bold,
-                )
-            }
+            DialogButton(
+                label = stringResource(Res.string.solve_pb_dismiss),
+                onClick = onDismiss,
+                emphasis = DialogButtonEmphasis.PRIMARY,
+            )
         },
     )
 }

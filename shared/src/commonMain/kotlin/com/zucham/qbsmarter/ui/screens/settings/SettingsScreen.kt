@@ -51,7 +51,6 @@ import androidx.compose.material3.SwipeToDismissBox
 import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -71,6 +70,8 @@ import androidx.compose.ui.unit.dp
 import com.zucham.qbsmarter.data.db.SettingsRepository
 import com.zucham.qbsmarter.domain.user.UserProfile
 import com.zucham.qbsmarter.ui.components.ConfirmationDialog
+import com.zucham.qbsmarter.ui.components.DialogButton
+import com.zucham.qbsmarter.ui.components.DialogButtonEmphasis
 import com.zucham.qbsmarter.ui.i18n.AppLanguage
 import com.zucham.qbsmarter.ui.theme.AppColorSchemes
 import com.zucham.qbsmarter.ui.theme.ThemeController
@@ -637,17 +638,17 @@ private fun CreateProfileDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = { onCreate(name) }) {
-                Text(stringResource(Res.string.profile_ok), fontWeight = FontWeight.Bold)
-            }
+            DialogButton(
+                label = stringResource(Res.string.profile_ok),
+                onClick = { onCreate(name) },
+            )
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text(
-                    stringResource(Res.string.devices_cancel),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
+            DialogButton(
+                label = stringResource(Res.string.devices_cancel),
+                onClick = onDismiss,
+                emphasis = DialogButtonEmphasis.NEUTRAL,
+            )
         },
     )
 }
@@ -755,9 +756,10 @@ private fun ProfileSettingsDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = onDismiss) {
-                Text(stringResource(Res.string.profile_close), fontWeight = FontWeight.Bold)
-            }
+            DialogButton(
+                label = stringResource(Res.string.profile_close),
+                onClick = onDismiss,
+            )
         },
     )
 }

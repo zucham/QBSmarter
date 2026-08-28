@@ -649,6 +649,16 @@ Flat list rows with a leading 3 dp colored stripe (filled on the active route). 
 
 The pill is **tappable** when an `onProfileTap` callback is supplied (it always is in the `AppNavHost` wiring) – tapping jumps to **Settings**, where profile management lives (rename, switch, export). Same nav pattern as the entry list rows: drawer closes, route navigates with `saveState`/`restoreState` so coming back from Settings restores the previous screen's scroll/state.
 
+#### Dialog buttons
+
+Every confirming dialog and modal in the app uses `DialogButton` (`ui/components/DialogButton.kt`) — an `OutlinedButton` with a 1 dp border drawn in the button's own content colour at 50% alpha.
+
+They used to be bare `TextButton`s: coloured text, no container. That reads well in Material's own specimens but poorly here — on a dialog surface with body text directly above, a coloured word is not obviously a *button*, and the tap target has no visible edge. Drawing the border in the content colour rather than the theme `outline` means a destructive action gets a red outline as well as red text: the warning is carried by the whole control, not just the word.
+
+Three emphases cover every dialog: `PRIMARY` (the action the dialog exists for), `DESTRUCTIVE` (theme `error`), `NEUTRAL` (`onSurfaceVariant`, normal weight so the eye lands on the action first and the way out second). Content padding is tighter than `ButtonDefaults.ContentPadding` (16 dp vs 24 dp horizontal), which keeps a two-button action row from wrapping on narrow phones.
+
+Centralised deliberately — an `OutlinedButton` spelled out at each of the dozen call sites is how the previous inconsistency (three different shades of "cancel") happened in the first place. Note this covers *dialog* actions only: the Info/Forget text buttons inside a paired-cube card are row actions, not dialog actions, and stay as they are.
+
 #### `AppTheme` and `ApplySystemBarsTheme`
 
 `AppTheme` reads `seed` and `mode` from `ThemeController` and chooses light/dark. Material3 doesn't ship "tertiary" colors per seed, so `AppColorSchemes` mirrors `primary` into `secondary` and `tertiary` – components like `FilterChip` (selected → `secondaryContainer`) and `SegmentedButton` automatically pick up the right color without per-component overrides.

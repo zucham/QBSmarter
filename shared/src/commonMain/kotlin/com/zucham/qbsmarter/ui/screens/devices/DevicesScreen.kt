@@ -53,6 +53,8 @@ import com.zucham.qbsmarter.data.db.PairedCube
 import com.zucham.qbsmarter.domain.driver.CubeVendor
 import com.zucham.qbsmarter.domain.driver.protocol.CubeProtocolRegistry
 import com.zucham.qbsmarter.ui.components.ConfirmationDialog
+import com.zucham.qbsmarter.ui.components.DialogButton
+import com.zucham.qbsmarter.ui.components.DialogButtonEmphasis
 import com.zucham.qbsmarter.ui.components.VerticalScrollbarBox
 import com.zucham.qbsmarter.ui.theme.ConnectionDotSize
 import com.zucham.qbsmarter.ui.theme.StatusColors
@@ -573,15 +575,11 @@ private fun CubeDetailDialog(cube: PairedCube, batteryLevel: Int?, onDismiss: ()
             }
         },
         confirmButton = {
-            TextButton(onClick = onDismiss) {
-                // onSurfaceVariant is Material3's documented role for
-                // "secondary text" – same vocabulary as the Cancel
-                // buttons across the app's dialogs.
-                Text(
-                    stringResource(Res.string.history_close),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
+            DialogButton(
+                label = stringResource(Res.string.history_close),
+                onClick = onDismiss,
+                emphasis = DialogButtonEmphasis.NEUTRAL,
+            )
         },
     )
 }

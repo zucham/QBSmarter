@@ -29,7 +29,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SwipeToDismissBox
 import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -48,6 +47,8 @@ import androidx.compose.ui.unit.sp
 import com.zucham.qbsmarter.data.db.SolveRow
 import com.zucham.qbsmarter.data.db.SolveSort
 import com.zucham.qbsmarter.ui.components.ConfirmationDialog
+import com.zucham.qbsmarter.ui.components.DialogButton
+import com.zucham.qbsmarter.ui.components.DialogButtonEmphasis
 import com.zucham.qbsmarter.ui.components.VerticalScrollbarBox
 import com.zucham.qbsmarter.util.formatDuration
 import com.zucham.qbsmarter.util.formatTps
@@ -457,21 +458,18 @@ private fun SolveDetailDialog(row: SolveRow, onDelete: () -> Unit, onDismiss: ()
             }
         },
         confirmButton = {
-            TextButton(onClick = onDelete) {
-                Text(
-                    stringResource(Res.string.history_delete),
-                    color = MaterialTheme.colorScheme.error,
-                    fontWeight = FontWeight.Bold,
-                )
-            }
+            DialogButton(
+                label = stringResource(Res.string.history_delete),
+                onClick = onDelete,
+                emphasis = DialogButtonEmphasis.DESTRUCTIVE,
+            )
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text(
-                    stringResource(Res.string.history_close),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
+            DialogButton(
+                label = stringResource(Res.string.history_close),
+                onClick = onDismiss,
+                emphasis = DialogButtonEmphasis.NEUTRAL,
+            )
         },
     )
 }
