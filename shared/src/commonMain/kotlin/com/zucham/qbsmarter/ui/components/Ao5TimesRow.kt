@@ -57,7 +57,6 @@ fun Ao5TimesRow(encoded: String, modifier: Modifier = Modifier) {
             val dropped = index in trimmed
             Text(
                 text = if (dropped) "($text)" else text,
-                fontFamily = FontFamily.Monospace,
                 // Dimmed as well as bracketed. The brackets carry the
                 // meaning for anyone who knows the convention; the
                 // contrast carries it for everyone else, and the two

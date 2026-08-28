@@ -498,7 +498,7 @@ private fun SolveDetailDialog(
                 Text(row.scramble, fontFamily = FontFamily.Monospace)
 
                 row.ao5Ms?.let {
-                    DetailRow(stringResource(Res.string.stat_ao5), formatDuration(it), monospace = true)
+                    DetailRow(stringResource(Res.string.stat_ao5), formatDuration(it))
                 }
                 // The five constituent times. Shown whenever they exist,
                 // which is not the same condition as the average existing
