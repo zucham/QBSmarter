@@ -126,9 +126,16 @@ com.zucham.qbsmarter
 ├── di/                         # AppModule (common Koin), AndroidPlatformModule, jvm/web stubs
 ├── domain/
 │   ├── cube/                   # RubiksCube, CubeState, CubeMove, CubeMoveQueue, CubeOrbiter, etc.
-│   ├── driver/                 # SmartCubeDriver/Event/Command, CubeTransport, CubeEncryptor
-│   │   └── gan/                # GanCubeDriver (Gen2/3/4), GanGeneration, GanParser interface,
-│   │                           # GanGen2Parser/Gen3Parser/Gen4Parser, BitView, GanEncryptor
+│   ├── driver/                 # SmartCubeDriver/Event/Command, CubeTransport, CubeEncryptor,
+│   │   │                       # CubeVendor, AesCbcMacSaltEncryptor, AesEcbEncryptor, BitView
+│   │   ├── protocol/           # CubeProtocol, ProtocolCubeDriver, CubeProtocolRegistry,
+│   │   │                       # ProtocolCodecs, MoveRecoveryFifo
+│   │   ├── gan/                # GanGen1/2/3/4Protocol, GanEncryptor
+│   │   ├── moyu/               # MoyuWcuProtocol, MoyuMhcProtocol, MoyuEncryptor,
+│   │   │                       # MoyuFaceletDecoder
+│   │   ├── qiyi/               # QiyiProtocol
+│   │   ├── gocube/             # GoCubeProtocol (GoCube + Rubik's Connected)
+│   │   └── giiker/             # GiikerProtocol
 │   ├── timing/                 # SolveTimer, ClockSkewEstimator
 │   └── user/                   # UserProfile data class
 ├── ui/
@@ -183,10 +190,10 @@ QBSmarter is a fairly conventional **MVVM + Repository** app, with a few twists 
 
 Smart-cube data plane (parallel to the read/write plane above):
 
- BleManager (platform) ─→ BleCubeTransport ─→ GanCubeDriver (Gen2/3/4)
+ BleManager (platform) ─→ BleCubeTransport ─→ ProtocolCubeDriver
        │                       │                    │
-       │                       │              decrypts + parses
-       │                       │              via active GanParser
+       │                       │              decrypts, then decodes
+       │                       │              via the bound CubeProtocol
        │                       │                    │
        │                       │                    ▼
        │                       │            SmartCubeEvent stream
@@ -281,10 +288,10 @@ This is the most subtle piece of BLE plumbing in the app. The order is:
 1. `devicesRepo.rememberCube(...)` – persist before anything else, so a flaky connect still leaves a row.
 2. **Tear down any existing connection first.** If `ble.connectionState.value` is `CONNECTED` or `CONNECTING`, call `ble.disconnect()` and `withTimeout(2 s) { ble.connectionState.first { it == DISCONNECTED } }`. This is the central enforcement point – every callable path that asks to connect a new cube routes through here, and `BleManager.connectToDevice`'s defensive guard backs it up by refusing if the GATT is somehow still alive.
 3. Set `_activeMac.value = device.address`. Note: this happens AFTER the teardown, not before – otherwise the long-lived Hardware/Battery event handlers (which read `_activeMac.value`) would attribute trailing events from the old cube to the new MAC.
-4. Build a `GanEncryptor` from the cube's MAC. The same encryptor class is used across all three generations – per the upstream gan-web-bluetooth reference, all GAN cubes since Gen2 share a static AES-128 CBC key + IV, and per-cube salt derivation from the MAC is identical across generations.
+4. Build a `CubeIdentity(mac, name)` for the cube. Everything downstream that needs to know *which* cube this is – the AES salt, QiYi's hello, GAN's key-set choice – takes it from here rather than reaching for the device again.
 5. `ble.connectToDevice(device)`.
-6. **Wait for service discovery + detect the protocol generation.** Collect `ble.discoveredServices` until a snapshot contains a UUID matching one of `GanGeneration.{GEN2, GEN3, GEN4}.serviceUuid`. The detected generation determines both the BLE characteristic UUIDs the transport binds to AND which parser the driver activates.
-7. Build `BleCubeTransport(serviceUuid, commandCharUuid, stateCharUuid)` from the detected generation's fields, then call `driver.connect(transport, encryptor, generation)`. The driver activates the matching parser, calls `parser.reset()`, enables notifications, which kicks off the CCCD descriptor write.
+6. **Wait for service discovery + resolve the protocol.** Collect `ble.discoveredServices` until a snapshot that `CubeProtocolRegistry.resolve(uuids, identity)` matches. Collecting until a match (rather than taking the first snapshot) matters because Android delivers discovered services incrementally. The winning row supplies the characteristic UUIDs, the encryptor factory and the protocol factory together, so they cannot disagree. `devicesRepo.updateVendor` stamps `spec.vendor` immediately; a row with `supported = false` is logged as recognised-but-not-drivable and otherwise proceeds.
+7. Build `BleCubeTransport(serviceUuid, commandCharUuid, stateCharUuid)` from the resolved spec, then call `driver.connect(transport, spec.createEncryptor(identity), spec.createProtocol(identity))`. The driver binds the fresh protocol instance and enables notifications, which kicks off the CCCD descriptor write. The protocol's own `onConnected` handshake runs once notifications are live.
 8. **Wait for `ble.notificationsReady` to flip true** (with a 3 s timeout fallback). Without this gate, the next 3 command writes race the descriptor write – the cube either drops them or replies into a void.
 9. Wait a further `FIRST_COMMAND_SETTLE_MS` (150 ms), then send `RequestHardware`, `RequestFacelets`, `RequestBattery` with **120 ms gaps** so back-to-back GATT writes don't overflow the queue on flaky stacks. Each is wrapped in `runCatching` – failures don't tear down the connection.
 10. Run `ensureHardwareInfo()` – see *Hardware handshake* below.
@@ -321,32 +328,24 @@ The reason all of this lives in a long-lived singleton (not a VM) is so navigati
 
 ### Smart-cube driver layer
 
-**Files:** `domain/driver/{CubeTransport, CubeEncryptor, CubeVendor, AesCbcMacSaltEncryptor, SmartCubeCommand, SmartCubeEvent, SmartCubeDriver, CubeDriverFacade, BitView}.kt`, `domain/driver/gan/{GanCubeDriver, GanGeneration, GanParser, GanGen2Parser, GanGen3Parser, GanGen4Parser, GanEncryptor}.kt`, `domain/driver/moyu/{MoyuCubeDriver, MoyuConstants, MoyuEncryptor, MoyuFaceletDecoder}.kt`.
+**Files:** `domain/driver/{CubeTransport, CubeEncryptor, CubeVendor, AesCbcMacSaltEncryptor, AesEcbEncryptor, SmartCubeCommand, SmartCubeEvent, SmartCubeDriver, BitView}.kt`, `domain/driver/protocol/{CubeProtocol, ProtocolCubeDriver, CubeProtocolRegistry, ProtocolCodecs, MoveRecoveryFifo}.kt`, `domain/driver/gan/{GanGen1Protocol, GanGen2Protocol, GanGen3Protocol, GanGen4Protocol, GanEncryptor}.kt`, `domain/driver/moyu/{MoyuWcuProtocol, MoyuMhcProtocol, MoyuEncryptor, MoyuFaceletDecoder}.kt`, `domain/driver/qiyi/QiyiProtocol.kt`, `domain/driver/gocube/GoCubeProtocol.kt`, `domain/driver/giiker/GiikerProtocol.kt`.
 
-The driver layer is **vendor-agnostic at the SmartCubeDriver interface** and **vendor-aware inside each per-vendor driver**. `SmartCubeDriver` is an interface; each cube vendor gets its own implementation. Today two vendors are supported:
+The driver layer is **protocol-agnostic everywhere except the protocols themselves**. `SmartCubeDriver` is an interface with exactly one implementation, `ProtocolCubeDriver`; what varies between cube families lives in a `CubeProtocol`, and which one to build is a lookup in `CubeProtocolRegistry`.
 
-- **GAN** via `GanCubeDriver`, which internally supports three protocol generations (Gen2, Gen3, Gen4) covering the full GAN smart-cube lineup. Inside the GAN driver, `GanGeneration.detect(advertisedServices)` picks the matching pre-allocated parser.
-- **MoYu** via `MoyuCubeDriver`, single-generation today (V10 AI).
-
-The `ConnectionOrchestrator` picks which vendor's driver to dispatch to via `CubeVendor.detect(advertisedServices)` – a two-step lookup that returns `GAN` if any of the three GAN service UUIDs match, `MOYU` if the V10 service UUID matches, else null. For GAN matches, the orchestrator then calls `GanGeneration.detect` to pick the generation. For MoYu, there's nothing further to pick today.
+`CubeVendor` is a *labelling* concept, not a protocol one — several vendors share a wire protocol, so a vendor may map to a protocol owned by someone else. It decides what the Devices screen prints on the chip and what goes in the `cubes.vendor` column; it decides nothing about how the app talks to the cube.
 
 ```
-┌──────────────────┐   raw bytes   ┌─────────────────────┐
-│ CubeTransport    │──────────────→│ GanCubeDriver       │
-│ (BLE adapter)    │←──────────────│  active GanParser   │
-└──────────────────┘   commands    │  (Gen2 / Gen3 / Gen4)│
-                                   └─────────────────────┘
-                ─── or ───
-┌──────────────────┐   raw bytes   ┌─────────────────────┐
-│ CubeTransport    │──────────────→│ MoyuCubeDriver      │
-│ (BLE adapter)    │←──────────────│  MoyuV10 parser     │
-└──────────────────┘   commands    └─────────────────────┘
-
-  GanCubeDriver.events ─┐
-                        ├──→ CubeDriverFacade.events ─→ subscribers
-  MoyuCubeDriver.events ─┘   (single stable SharedFlow that the rest
-                              of the app binds against as
-                              `SmartCubeDriver.events`)
+┌──────────────────┐   raw bytes   ┌──────────────────────┐
+│ CubeTransport    │──────────────→│ ProtocolCubeDriver   │
+│ (BLE adapter)    │←──────────────│  decrypt (or not)    │
+└──────────────────┘   commands    │  ↓                   │
+                                   │  CubeProtocol.decode │
+                                   └──────────┬───────────┘
+                                              │
+                    ProtocolCubeDriver.events ─→ subscribers
+                    (single stable SharedFlow that the rest
+                     of the app binds against as
+                     `SmartCubeDriver.events`)
 
                                           ▼
                                  ┌────────────────────┐
@@ -358,15 +357,11 @@ The `ConnectionOrchestrator` picks which vendor's driver to dispatch to via `Cub
                                  └────────────────────┘
 ```
 
-**Why a facade.** The rest of the app (`SolveViewModel`, `AppLifecycle`) binds against `SmartCubeDriver` once. Without a facade, swapping in a different vendor driver per cube would force every subscriber to re-bind. `CubeDriverFacade` is a `SmartCubeDriver` that holds a reference to whichever real driver the orchestrator has currently activated (`bindActiveDriver(driver)`) and re-publishes that driver's events on its own stable `SharedFlow`. Cube swaps – even cross-vendor swaps – never break the subscription model. The orchestrator's own event-handler `init` block also subscribes to `facade.events` for the same reason.
-
-**Generation auto-detection (GAN).** Once `CubeVendor.detect` returns GAN, the orchestrator calls `GanGeneration.detect(advertisedServices)` to pick Gen2/Gen3/Gen4. The matched generation is passed to `GanCubeDriver.connect(transport, encryptor, generation)`, which selects the corresponding pre-allocated parser.
-
 **Encryption.** GAN and MoYu both use AES-128 CBC with a static root key + IV mixed with a 6-byte per-cube salt derived from the BLE MAC (reversed bytes). Only the root key and IV differ between vendors; the salt-mix algorithm and the two-block encryption-for-payloads-larger-than-16-bytes scheme are identical. The shared expect/actual `AesCbcMacSaltEncryptor(rootKey, rootIv, salt)` carries the actual AES code; `GanEncryptor` and `MoyuEncryptor` are thin wrappers that bake in the vendor-specific constants. (The `% 0xFF` salt-mix modulus instead of `% 0x100` is a quirk of the original GAN protocol that MoYu inherited verbatim.)
 
 **One driver, many protocols.** Every cube family runs through a single `ProtocolCubeDriver`. What differs between families lives entirely in a `CubeProtocol` — a pure codec plus an optional handshake, owning no coroutines, no BLE handles and no lifecycle. Adding a brand is: write one `CubeProtocol`, add one row to `CubeProtocolRegistry`. Nothing else changes — not the driver, not the transport, not the orchestrator, not the UI.
 
-This replaced a driver *per vendor* (`GanCubeDriver`, `MoyuCubeDriver`) plus a `CubeDriverFacade` that multiplexed between them. Each driver carried its own copy of the same scope, ingest job, event flow, decrypt call and connect/disconnect bookkeeping, and the set was about to grow to six. With one driver there is nothing left to multiplex, so the facade is gone too.
+This replaced a driver *per vendor* (`GanCubeDriver`, `MoyuCubeDriver`) plus a `CubeDriverFacade` that multiplexed between them. Each driver carried its own copy of the same scope, ingest job, event flow, decrypt call and connect/disconnect bookkeeping, and the set was about to grow to six. With one driver there is nothing left to multiplex, so the facade is gone too — every subscriber, the orchestrator's own event-handler `init` block included, binds `driver.events` once at construction and is never re-bound, because swapping cubes swaps the driver's *protocol*, not the driver.
 
 ```
 CubeProtocolRegistry  (the table: UUIDs + encryptor factory + protocol factory)
@@ -412,7 +407,7 @@ Two service collisions are resolved deliberately. `0000fff0` is shared by QiYi a
 - **GAN 16 UI, i Carry 4, i Carry E, 12 UI SP, 356 i3 V2** have no public protocol data in any repository — not cstimer, not gan-web-bluetooth, not cubing.js. They are not stubbed, because a stub implies a known shape. If they reuse an existing service UUID they will be driven correctly today with no code change.
 
 
-**Driver scope:** each driver owns its own `CoroutineScope(SupervisorJob() + parserDispatcher)` (default `Dispatchers.Default`), so decryption and parsing never run on the BLE binder thread. The events `SharedFlow` has `replay = 0`, `extraBufferCapacity = 64` – generous enough that a paused subscriber (user navigated away momentarily) doesn't drop moves. The facade has its own `MutableSharedFlow` with the same buffer settings so the merged stream gets equivalent jitter tolerance.
+**Driver scope:** the driver owns a `CoroutineScope(SupervisorJob() + parserDispatcher)` (default `Dispatchers.Default`), so decryption and decoding never run on the BLE binder thread. The events `SharedFlow` has `replay = 0`, `extraBufferCapacity = 64` – generous enough that a paused subscriber (user navigated away momentarily) doesn't drop moves.
 
 ---
 
@@ -1080,7 +1075,7 @@ Static reverse-engineered constants (key, IV, character map, command codes) are 
 
 ### Service / characteristic UUIDs
 
-Three sets, one per protocol generation. The active orchestrator picks the matching set at runtime via `GanGeneration.detect(...)`:
+Three sets, one per drivable protocol generation, held as `CubeProtocolRegistry` rows (`gan-gen2`, `gan-gen3`, `gan-gen4`) and resolved at connect time by `CubeProtocolRegistry.resolve(...)`:
 
 ```
 Gen2 (i Carry, i Carry S, i 3, GAN12 ui, GAN Mini ui FreePlay, Monster Go 3Ai)
@@ -1145,7 +1140,7 @@ Each component is packed as `[sign_bit | magnitude_bits]`. `fixSigned` recovers 
 0x0A  RequestReset (16-byte payload of magic bytes)
 ```
 
-Each command is a 20-byte payload with the opcode at byte 0; reset has a fixed magic-byte tail. `RequestMoveHistory` is also defined in `SmartCubeCommand` for Gen3/Gen4 compatibility, but `GanGen2Parser.buildCommand` returns `null` for it – Gen2's recovery path is the orchestrator's MovesMissed → Facelets resync.
+Each command is a 20-byte payload with the opcode at byte 0; reset has a fixed magic-byte tail. `RequestMoveHistory` is also defined in `SmartCubeCommand` for Gen3/Gen4 compatibility, but `GanGen2Protocol.buildCommand` returns `null` for it – Gen2's recovery path is the orchestrator's MovesMissed → Facelets resync.
 
 ### Packet format (decrypted) – Gen3 / Gen4
 
@@ -1180,7 +1175,7 @@ Commands use `0xDD`/`0xDF`/`0xD2`/`0xD1` at byte 0.
 
 **Recovery (Gen3/Gen4).** When a Move event's serial is more than 1 ahead of the parser's `lastSerial`, the parser inserts the move into a FIFO and asks the cube to retransmit the gap via `RequestMoveHistory(startSerial, count)`. The cube responds with a `MOVE_HISTORY` event whose moves the parser injects at the FIFO head. The FIFO is drained from the head as long as serials remain contiguous. If the FIFO grows past 16 entries the parser surfaces `MovesMissed` and the orchestrator falls back to `RequestFacelets` resync – same bail-out as Gen2.
 
-The parser asks for backfill via a `historyRequester: suspend (startSerial, count) -> Unit` callback supplied to `parseStatePacket`, which `GanCubeDriver` wires to its own `send(...)` path so the request is encrypted and routed through the active transport.
+The protocol asks for backfill through the `ProtocolIo` handed to `decode`, whose `send(...)` encrypts and routes the request over the active transport. The gap bookkeeping itself is `MoveRecoveryFifo`, shared by Gen3 and Gen4 rather than copied into each.
 
 ---
 
