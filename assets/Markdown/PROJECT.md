@@ -755,7 +755,7 @@ Layout (top → bottom):
 ```
 ConnectionIndicator
 CubeView (square, fills available vertical space)
-ActionRow  [Reset Orientation] [Gyro?]   [Reset State]
+ActionRow  [Gyro?] [Reset Orientation]   [Reset State]
 ScrambleCard  [scramble text + correction prefix]   [New]
 ─── flexible spacer ───
 TimerArea  (timer / status / inspection / post-solve, centered in the spacer)
@@ -767,6 +767,10 @@ The cube box is `weight(1f)` and fills whatever vertical space remains between t
 When disconnected, a translucent scrim `Box` is drawn on top of `CubeView`. (`Modifier.alpha` doesn't work – Korender renders into a separate hardware overlay layer that bypasses Compose's graphics layer.)
 
 The dot+name row in `ConnectionIndicator` is a tappable shortcut to the Devices screen **when connected**. When disconnected the row is non-tappable because the explicit "Connect cube" button below already provides that path; making both tappable would split the user's attention.
+
+##### ActionRow ordering
+
+Gyro sits at the fixed left edge; Reset Orientation grows and shrinks to its right. The order matters because Reset Orientation is shown only while the cube is off-identity, which — with the gyro live — is most of the time the cube is being handled. With Reset Orientation on the left, every one of those appearances shoved Gyro sideways, and Gyro is the button the user is most likely to be reaching for while the cube is moving. Putting the stable control first means only the transient one moves. Gyro still shifts slightly as its own active dot animates, but that motion belongs to the button and reflects a state the user just changed.
 
 ##### ActionRow button colors
 

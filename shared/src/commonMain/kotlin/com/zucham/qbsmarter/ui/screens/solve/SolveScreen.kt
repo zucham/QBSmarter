@@ -415,25 +415,37 @@ private fun ConnectionIndicator(
 /**
  * Solve action row layout:
  *
- *   [Reset Orientation (animated)] [Gyro?] ←Spacer weight=1f→ [Reset State]
+ *   [Gyro?] [Reset Orientation (animated)] ←Spacer weight=1f→ [Reset State]
  *
- * Reset Orientation is the leftmost slot and only visible when the cube
- * is NOT already aligned to identity. It's wrapped in a separate
- * composable ([AnimatedResetOrientationButton]) so the
- * [androidx.compose.animation.AnimatedVisibility] call resolves
- * unambiguously to the unscoped overload – the version with a `RowScope`
- * receiver kept being picked here when the call sat directly inside a
- * `Row { … }`, which produced "cannot be called in this context with an
- * implicit receiver" errors. Hoisting it into its own composable means
- * the call site is no longer inside a RowScope.
- *
- * Gyro is the second slot and only shows when [showGyroButton] is true
+ * Gyro is the leftmost slot and only shows when [showGyroButton] is true
  * (cube confirmed to support gyro via the INFO handshake). Hidden in all
  * other cases (unknown / unsupported) so the button doesn't tease a
  * non-functional feature. Unlike its neighbours it's a *toggle*, so it
  * carries its state in its fill via [gyroEnabled] – without that the
  * user has no way to tell whether a tap turned the feature on or off,
  * since a stationary cube looks identical either way.
+ *
+ * **Why Gyro comes first.** Reset Orientation appears and disappears
+ * constantly — it is shown only while the cube is off-identity, which
+ * with the gyro live is most of the time the cube is being handled. When
+ * it sat to the left, every one of those transitions shoved Gyro
+ * sideways, and Gyro is the button the user is most likely to be
+ * reaching for while the cube is moving. Putting the stable control at
+ * the fixed left edge and letting the volatile one grow and shrink to
+ * its right means only the transient button moves. Gyro still shifts
+ * slightly as its own active dot animates in and out, but that motion
+ * belongs to the button itself and reflects a state the user just
+ * changed.
+ *
+ * Reset Orientation is the second slot and only visible when the cube is
+ * NOT already aligned to identity. It's wrapped in a separate composable
+ * ([AnimatedResetOrientationButton]) so the
+ * [androidx.compose.animation.AnimatedVisibility] call resolves
+ * unambiguously to the unscoped overload – the version with a `RowScope`
+ * receiver kept being picked here when the call sat directly inside a
+ * `Row { … }`, which produced "cannot be called in this context with an
+ * implicit receiver" errors. Hoisting it into its own composable means
+ * the call site is no longer inside a RowScope.
  *
  * The Spacer with weight=1f anchors Reset State to the right edge no
  * matter how many of the left-side slots are currently visible.
@@ -455,10 +467,6 @@ private fun ActionRow(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        AnimatedResetOrientationButton(
-            visible = showResetOrientation,
-            onClick = onResetOrientation,
-        )
         if (showGyroButton) {
             ThemedToggleButton(
                 label = stringResource(Res.string.solve_toggle_gyro),
@@ -470,6 +478,10 @@ private fun ActionRow(
                 onClick = onToggleGyro,
             )
         }
+        AnimatedResetOrientationButton(
+            visible = showResetOrientation,
+            onClick = onResetOrientation,
+        )
         Spacer(modifier = Modifier.weight(1f))
         DestructiveButton(stringResource(Res.string.solve_reset_state), onResetState)
     }
