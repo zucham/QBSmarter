@@ -50,6 +50,7 @@ import androidx.compose.ui.unit.sp
 import com.zucham.qbsmarter.data.ble.BleDevice
 import com.zucham.qbsmarter.data.ble.ConnectionState
 import com.zucham.qbsmarter.data.db.PairedCube
+import com.zucham.qbsmarter.domain.driver.CubeVendor
 import com.zucham.qbsmarter.ui.components.ConfirmationDialog
 import com.zucham.qbsmarter.ui.components.VerticalScrollbarBox
 import com.zucham.qbsmarter.ui.theme.ConnectionDotSize
@@ -57,6 +58,8 @@ import com.zucham.qbsmarter.ui.theme.StatusColors
 import org.jetbrains.compose.resources.stringResource
 import org.koin.compose.viewmodel.koinViewModel
 import qbsmarter.shared.generated.resources.Res
+import qbsmarter.shared.generated.resources.device_vendor_gan
+import qbsmarter.shared.generated.resources.device_vendor_moyu
 import qbsmarter.shared.generated.resources.devices_available
 import qbsmarter.shared.generated.resources.devices_bt_disabled
 import qbsmarter.shared.generated.resources.devices_bt_enable
@@ -600,11 +603,16 @@ private fun DeviceList(devices: List<BleDevice>, onPair: (BleDevice) -> Unit) {
     }
 
     val sorted = remember(devices) {
-        devices.sortedWith { a, b ->
-            val ga = a.address.isGanCubeMac()
-            val gb = b.address.isGanCubeMac()
-            when { ga && !gb -> -1; !ga && gb -> 1; else -> 0 }
-        }
+        // Known-vendor devices float to the top of the list so the cubes
+        // the user actually paired this app for are surfaced first. Among
+        // those, GAN comes before MoYu by enum ordinal – arbitrary but
+        // stable. Unknown-vendor scan hits (other BLE peripherals nearby:
+        // headphones, watches, etc.) sink to the bottom.
+        devices.sortedWith(
+            compareBy(
+                { it.detectVendor()?.ordinal ?: Int.MAX_VALUE },
+            )
+        )
     }
 
     val listState = rememberLazyListState()
@@ -635,24 +643,30 @@ private fun DeviceList(devices: List<BleDevice>, onPair: (BleDevice) -> Unit) {
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             items(sorted) { device ->
-                val isGan = device.address.isGanCubeMac()
+                // Known-vendor cubes use the saturated `primary` color
+                // so the cubes the user is most likely there to connect
+                // pop visually; unknown-vendor scan hits use the panel-
+                // matching `surfaceContainerHigh`.
+                val vendor = device.detectVendor()
+                val isKnownCube = vendor != null
                 Button(
                     onClick = { onPair(device) },
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(8.dp),
-                    // GAN cubes use the seed's full `primary` (saturated,
-                    // text in onPrimary) so they stand out clearly from
-                    // non-GAN entries on the same panel. Previously
-                    // primaryContainer rendered too soft to draw the eye
-                    // when there were several devices visible.
+                    // Known-vendor cubes use the seed's full `primary`
+                    // (saturated, text in onPrimary) so they stand out
+                    // clearly from non-cube entries on the same panel.
+                    // Previously primaryContainer rendered too soft to
+                    // draw the eye when there were several devices
+                    // visible.
                     //
-                    // Non-GAN devices use surfaceContainerHigh. The tile
+                    // Other devices use surfaceContainerHigh. The tile
                     // sits on top of a surfaceContainerLow panel, so
                     // High gives a clear one-step lift in both modes
                     // without the heavy-slab feel of the previous
                     // `surfaceContainerHighest` (which read as too
                     // dark in light mode against the lighter panel).
-                    colors = if (isGan) {
+                    colors = if (isKnownCube) {
                         ButtonDefaults.buttonColors(
                             containerColor = MaterialTheme.colorScheme.primary,
                             contentColor = MaterialTheme.colorScheme.onPrimary,
@@ -670,9 +684,13 @@ private fun DeviceList(devices: List<BleDevice>, onPair: (BleDevice) -> Unit) {
                                 device.name ?: stringResource(Res.string.devices_unknown),
                                 fontWeight = FontWeight.Bold,
                             )
-                            if (isGan) {
+                            if (vendor != null) {
                                 Spacer(Modifier.size(8.dp))
-                                Text("• GAN", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                                Text(
+                                    "• " + stringResource(vendor.labelRes()),
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 12.sp,
+                                )
                             }
                         }
                         Text(device.address, fontSize = 12.sp)
@@ -687,12 +705,44 @@ private fun DeviceList(devices: List<BleDevice>, onPair: (BleDevice) -> Unit) {
 /**
  * MAC OUI prefixes assigned to GAN smart cubes. New GAN models that show up
  * with a different prefix should be added here so they're surfaced to the
- * top of the available-devices list.
+ * top of the available-devices list. Detection is by MAC because the GAN
+ * device-name format varies (cube-name, model id, etc.) but the OUI is
+ * stable across the product line.
  */
-private val GAN_CUBE_OUI_PREFIXES = listOf("AB:12:34")
+/**
+ * Vendor inferred from a pre-connect scan hit. Used by the
+ * available-devices list to sort known cubes to the top and give them
+ * the saturated tile plus a vendor chip.
+ *
+ * All the judgement lives in [CubeVendor.detectFromScan] — advertised
+ * service UUIDs first, then device-name prefix, then MAC OUI — so the
+ * scan-time answer and the post-connect answer can't drift apart. This
+ * screen only decides what to *do* with the result.
+ *
+ * The previous version made the call here, from the MAC alone, against a
+ * one-entry OUI list. Cubes built on any other radio module went
+ * unrecognised: no chip, no sorting, buried among the earbuds — while
+ * connecting to them worked fine, which made it read as a scanning bug
+ * rather than a classification one.
+ */
+private fun BleDevice.detectVendor(): CubeVendor? =
+    CubeVendor.detectFromScan(
+        name = name,
+        macAddress = address,
+        advertisedServices = advertisedServiceUuids,
+    )
 
-private fun String.isGanCubeMac(): Boolean =
-    GAN_CUBE_OUI_PREFIXES.any { startsWith(it, ignoreCase = true) }
+/**
+ * Localised label for a [CubeVendor]. Used by the available-devices tile
+ * chip and (in future) anywhere else the vendor needs to be named in UI.
+ * Brand names are kept identical across locales, but routing through
+ * `stringResource` keeps the wiring uniform if any translation ever
+ * decides otherwise (e.g. a different transliteration for a CJK locale).
+ */
+private fun CubeVendor.labelRes() = when (this) {
+    CubeVendor.GAN -> Res.string.device_vendor_gan
+    CubeVendor.MOYU -> Res.string.device_vendor_moyu
+}
 
 /**
  * Tiny in-button spinner used inside a disabled "Connecting…" pill.

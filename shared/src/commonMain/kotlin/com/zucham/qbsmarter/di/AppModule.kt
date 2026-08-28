@@ -144,6 +144,7 @@ val sharedModule = module {
             settingsRepo = get(),
             screenKeeper = get(),
             ble = get(),
+            orchestrator = get(),
             statRegistry = get(),
             activeProfile = get(),
             cache = get(),

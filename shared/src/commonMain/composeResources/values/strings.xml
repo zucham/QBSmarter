@@ -65,6 +65,10 @@
     <string name="devices_forget_title">Forget cube?</string>
     <string name="devices_forget_message">Remove this cube from this device. You can pair it again later.</string>
     <string name="devices_unknown">Unknown</string>
+    <!-- Vendor labels for the cube tile chip on the Devices screen.
+         Brand names – kept identical across locales as proper nouns. -->
+    <string name="device_vendor_gan">GAN</string>
+    <string name="device_vendor_moyu">MoYu</string>
     <string name="devices_no_permissions">Bluetooth permissions are required to scan for cubes and pair them.</string>
     <string name="devices_bt_disabled">Bluetooth is turned off. Enable it to scan for cubes and pair them.</string>
     <string name="devices_bt_enable">Enable Bluetooth</string>

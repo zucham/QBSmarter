@@ -57,14 +57,27 @@ class DevicesViewModel(
     val pairedCubes: StateFlow<List<PairedCube>> = cache.pairedCubes
 
     /**
-     * Best-effort identity of the currently connected paired cube. We don't
-     * track which MAC is on the wire from the BLE side, so we use the same
-     * heuristic as the Solve screen: the most-recently-seen paired cube,
-     * surfaced only while [connectionState] is CONNECTED.
+     * Identity of the currently connected paired cube, or null when
+     * nothing is connected. Drives the green dot and accent border on
+     * the matching row.
+     *
+     * Resolved by MAC from [ConnectionOrchestrator.activeMac], the
+     * authoritative record of which cube is on the wire. This used to
+     * guess "whichever paired cube was seen most recently", on the
+     * theory that connecting refreshes `last_seen` and floats the right
+     * row to the head of the list. That guess breaks whenever the
+     * ordering doesn't cooperate: the cube connects fine and no row
+     * lights up, or worse, the wrong row does.
+     *
+     * No `firstOrNull()` fallback, deliberately: an unlit row while the
+     * MAC is still propagating is a momentary blank, whereas lighting up
+     * a row we're only guessing at misreports which cube the app is
+     * talking to.
      */
     val connectedCubeId: StateFlow<String?> =
-        pairedCubes.combine(connectionState) { paired, state ->
-            if (state == ConnectionState.CONNECTED) paired.firstOrNull()?.id else null
+        combine(pairedCubes, connectionState, orchestrator.activeMac) { paired, state, mac ->
+            if (state != ConnectionState.CONNECTED || mac == null) null
+            else paired.firstOrNull { it.mac == mac }?.id
         }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
     /**

@@ -335,27 +335,51 @@ actual class BleManager(private val context: Context) {
             if (!hasConnectPermission()) return
             val device = result.device
             val name = runCatching { device.name }.getOrNull()
-            val ble = BleDevice(name = name, address = device.address)
+            // Service UUIDs from the advertisement, when the peripheral
+            // includes them. This is what lets the Devices screen
+            // recognise a cube by protocol rather than by guessing from
+            // its MAC or name.
+            val services = result.scanRecord?.serviceUuids
+                ?.map { it.uuid.toString().lowercase() }
+                .orEmpty()
+            val ble = BleDevice(
+                name = name,
+                address = device.address,
+                advertisedServiceUuids = services,
+            )
             val current = _scannedDevices.value
             val existingIdx = current.indexOfFirst { it.address == ble.address }
             if (existingIdx < 0) {
                 // First time we've seen this MAC in this scan session.
                 _scannedDevices.value = current + ble
-                Log.d(TAG, "Found ${ble.name ?: "Unknown"} (${ble.address})")
+                Log.d(
+                    TAG,
+                    "Found ${ble.name ?: "Unknown"} (${ble.address}) services=$services",
+                )
             } else {
-                // BLE name discovery is asynchronous: the first advertising
-                // packet often arrives without a name, then a follow-up
-                // scan-response packet carries it. If we previously stored
-                // a null/blank name and now have a real one, replace the
-                // entry so the user sees the device labeled correctly.
-                // Without this, a cube whose name arrived a few hundred ms
-                // late would stay "Unknown" forever in the available list.
+                // Advertising data arrives in pieces: the first packet
+                // often carries neither a name nor service UUIDs, with a
+                // follow-up scan-response filling them in. Merge rather
+                // than replace, so a late name doesn't discard services
+                // we already saw (or vice versa). Without this a cube
+                // would stay "Unknown", or unrecognised, forever.
                 val existing = current[existingIdx]
-                if (existing.name.isNullOrBlank() && !name.isNullOrBlank()) {
+                val mergedName = existing.name?.takeUnless { it.isBlank() } ?: name
+                val mergedServices =
+                    if (services.isNotEmpty()) services else existing.advertisedServiceUuids
+                val merged = existing.copy(
+                    name = mergedName,
+                    advertisedServiceUuids = mergedServices,
+                )
+                if (merged != existing) {
                     _scannedDevices.value = current.toMutableList().also {
-                        it[existingIdx] = ble
+                        it[existingIdx] = merged
                     }
-                    Log.d(TAG, "Updated name for ${ble.address}: ${ble.name}")
+                    Log.d(
+                        TAG,
+                        "Updated ${ble.address}: name=${merged.name} " +
+                            "services=${merged.advertisedServiceUuids}",
+                    )
                 }
             }
         }

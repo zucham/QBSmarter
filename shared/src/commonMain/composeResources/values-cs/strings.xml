@@ -57,6 +57,10 @@
     <string name="devices_forget_title">Zapomenout kostku?</string>
     <string name="devices_forget_message">Chcete tuto kostku odebrat ze seznamu spárovaných zařízení? Můžete ji znovu spárovat později.</string>
     <string name="devices_unknown">Neznámé</string>
+    <!-- Vendor labels for the cube tile chip on the Devices screen.
+         Brand names – kept identical across locales as proper nouns. -->
+    <string name="device_vendor_gan">GAN</string>
+    <string name="device_vendor_moyu">MoYu</string>
     <string name="devices_no_permissions">Pro vyhledávání a spárování kostek je potřeba aplikaci povolit oprávnění na používání Bluetooth.</string>
     <string name="devices_bt_disabled">Bluetooth je vypnutý. Zapněte ho pro vyhledávání a spárování kostek.</string>
     <string name="devices_bt_enable">Zapnout Bluetooth</string>

@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import co.touchlab.kermit.Logger
 import com.zucham.qbsmarter.data.ble.BleManager
+import com.zucham.qbsmarter.data.ble.ConnectionOrchestrator
 import com.zucham.qbsmarter.data.ble.ConnectionState
 import com.zucham.qbsmarter.data.cache.AppCache
 import com.zucham.qbsmarter.data.db.PairedCube
@@ -66,6 +67,7 @@ class SolveViewModel(
     private val settingsRepo: SettingsRepository,
     private val screenKeeper: ScreenKeeper,
     ble: BleManager,
+    orchestrator: ConnectionOrchestrator,
     private val activeProfile: ActiveProfile,
     private val cache: AppCache,
     private val scrambleGenerator: ScrambleGenerator = ScrambleGenerator(),
@@ -174,14 +176,30 @@ class SolveViewModel(
     val lastSolveInfo: StateFlow<LastSolveInfo?> = _lastSolveInfo.asStateFlow()
 
     /**
-     * Connection summary for the header indicator. Combines BLE connection
-     * state with the most-recently-paired cube name (best-effort: we don't
-     * track which cube is *actually* connected on the BLE side, so we show
-     * the latest-paired cube as a proxy when CONNECTED).
+     * Connection summary for the header indicator: BLE state plus the
+     * row of the cube that is actually on the wire.
+     *
+     * The cube is resolved by MAC from
+     * [ConnectionOrchestrator.activeMac], which is the only authoritative
+     * answer to "which cube is this". It matters beyond the displayed
+     * name: [CubeConnectionSummary.gyroSupported] gates the Gyro button,
+     * and reading that off the wrong row would either hide the button on
+     * a gyro cube or offer it on one without the sensor.
+     *
+     * The `paired.firstOrNull()` fallback covers the window between
+     * CONNECTED and the orchestrator publishing a MAC, and mirrors the
+     * previous behaviour (paired cubes are ordered last-seen first, and
+     * connecting refreshes last_seen, so the head of the list is a
+     * decent guess).
      */
     val connectionSummary: StateFlow<CubeConnectionSummary> =
-        combine(ble.connectionState, cache.pairedCubes) { state, paired ->
-            CubeConnectionSummary(state = state, cube = paired.firstOrNull())
+        combine(
+            ble.connectionState,
+            cache.pairedCubes,
+            orchestrator.activeMac,
+        ) { state, paired, activeMac ->
+            val active = activeMac?.let { mac -> paired.firstOrNull { it.mac == mac } }
+            CubeConnectionSummary(state = state, cube = active ?: paired.firstOrNull())
         }.stateIn(
             viewModelScope,
             SharingStarted.Eagerly,

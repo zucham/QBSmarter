@@ -63,5 +63,71 @@ enum class CubeVendor(val key: String) {
             }
             return null
         }
+
+        /**
+         * Best-effort vendor for a device seen in a scan, before any
+         * connection exists.
+         *
+         * Three signals, strongest first:
+         *
+         *  1. **Advertised service UUIDs** — authoritative when present.
+         *     Identical to the post-connect check, just available a step
+         *     earlier.
+         *  2. **Device-name prefix** — what both reference clients
+         *     (cstimer, gan-web-bluetooth) use, and the reliable
+         *     fallback when a cube advertises no services.
+         *  3. **MAC OUI prefix** — a weak hint, kept only for cubes that
+         *     advertise neither services nor a recognisable name.
+         *
+         * Layering them matters. An earlier version relied on the OUI
+         * list alone, and that list held a single prefix; every GAN cube
+         * built on a different radio module was therefore invisible to
+         * the Devices screen — not sorted to the top, no vendor chip —
+         * even though connecting to it worked perfectly. Any one of
+         * these signals is incomplete on its own; the union is not.
+         *
+         * Returns null for genuinely unrecognised peripherals (phones,
+         * earbuds, watches), which the Devices screen lists plainly.
+         */
+        fun detectFromScan(
+            name: String?,
+            macAddress: String,
+            advertisedServices: Iterable<String>,
+        ): CubeVendor? {
+            detect(advertisedServices)?.let { return it }
+            NAME_PREFIXES.firstOrNull { (prefix, _) ->
+                name?.startsWith(prefix, ignoreCase = true) == true
+            }?.let { return it.second }
+            if (GAN_MAC_OUI_PREFIXES.any { macAddress.startsWith(it, ignoreCase = true) }) {
+                return GAN
+            }
+            return null
+        }
+
+        /**
+         * BLE advertised-name prefixes that identify a cube vendor.
+         *
+         * GAN ships three: `GAN` for the main line, `MG` for Monster Go,
+         * and `AiCube` for the MoYu AI 2023 — which, confusingly, speaks
+         * GAN's protocol, so it maps to [GAN] rather than [MOYU]. The
+         * MoYu entry covers the V10 AI's own protocol.
+         *
+         * Matched case-insensitively; a cube advertising no name simply
+         * yields no match here and falls through to the OUI check.
+         */
+        private val NAME_PREFIXES: List<Pair<String, CubeVendor>> = listOf(
+            "GAN" to GAN,
+            "MG" to GAN,
+            "AiCube" to GAN,
+            MoyuConstants.DEVICE_NAME_PREFIX to MOYU,
+        )
+
+        /**
+         * MAC OUI prefixes observed on GAN cubes. Last-resort signal
+         * only — GAN uses several radio modules and this list will never
+         * be complete, which is precisely why it sits behind the
+         * service-UUID and name checks rather than in front of them.
+         */
+        private val GAN_MAC_OUI_PREFIXES = listOf("AB:12:34", "CC:A3:00", "D4:AF:2D")
     }
 }
