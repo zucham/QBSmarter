@@ -1358,6 +1358,7 @@ created_at                                           name (advertised)         s
                                                                                is_dnf
                                                                                penalty_ms
                                                                                move_count
+                                                                               cube_mac  (no FK)
 ```
 
 - `app_state` is a single-row pattern: PK is constant 0 (`CHECK (id = 0)`), so it can hold at most one row. `INSERT OR IGNORE` bootstraps; `UPDATE` mutates.
@@ -1370,6 +1371,7 @@ created_at                                           name (advertised)         s
 - `solves` indexes: `(user_id, solved_at DESC)`, `(user_id, is_dnf, (duration_ms + penalty_ms))`, `(user_id, ao5_ms) WHERE ao5_ms IS NOT NULL`. See *Record queries and the ranking index*.
 - `solves.bestDuration` returns `MIN(duration_ms + penalty_ms)` skipping DNFs. Aliased `AS best` so the generated row class has a stable Kotlin property name.
 - `solves.ao5_ms` / `ao5_times` are **derived** columns, maintained by `Ao5` on every path that can change them (insert, penalty edit, delete, import rebuild). `ao5_times` holds the five effective times oldest-first with `D` for a DNF. They are nullable independently: a window of five holding two DNFs has times but no average.
+- `solves.cube_mac` records which physical cube the solve was done on. **No FK** — forgetting a cube must neither delete its solves nor be refused, and the MAC outlives the `cubes` row, the same reasoning `cube_names` uses.
 - `solves.move_count` (default 0) is the total cube turns recorded during the solve. Already counted at runtime by `SolveViewModel` for the live TPS calculation (`fluency = moveCount * 1000 / durationMs`); persisting it lets the History detail dialog show "Turns: N" alongside the time. **Not consumed by any stat** – it's a History-only field by product spec. The 0 default keeps the column SQL-compatible with old call sites (e.g. tests that insert via the repo without the new arg) and lets the History dialog hide the row for pre-feature data via a `> 0` guard.
 - `settings` value is always TEXT; typed accessors in `SettingsRepository` parse to bool/int/string.
 
@@ -1400,6 +1402,7 @@ The `.sq` files always describe the *current* schema. Each `.sqm` is a delta app
 | `2.sqm` | 2 → 3 | deletes the rows orphaned by profile deletions made while foreign keys were unenforced |
 | `3.sqm` | 3 → 4 | adds `solves.ao5_times` and backfills both Ao5 columns for the whole history |
 | `4.sqm` | 4 → 5 | replaces `solves_user_duration` with `solves_user_rank` and `solves_user_ao5` |
+| `5.sqm` | 5 → 6 | adds `solves.cube_mac` and `solves_user_cube` |
 
 **`1.sqm`.** Creates `cube_names` and carries every existing `cubes.name` across as an override belonging to the profile that currently owns the cube: whoever renamed a cube keeps seeing their name, nobody else inherits it. Cubes whose owning profile no longer exists are skipped — there is no profile for the name to belong to, and filtering here rather than relying on a cleanup elsewhere keeps this file correct under foreign-key enforcement on its own, which matters for a file that will still be run years after it was written.
 

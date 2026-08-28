@@ -37,6 +37,15 @@
 -- of, and the five rows may be far outside any window the app still has
 -- in memory.
 --
+-- cube_mac: which physical cube the solve was done on, so History can
+-- filter and group by cube. **Deliberately not a foreign key.** cubes.mac
+-- is UNIQUE so an FK would be legal, but it would force forgetting a cube
+-- to either cascade-delete its solves or be refused, and neither is what
+-- "forget this cube" means. The MAC outlives the `cubes` row anyway – a
+-- forget-and-re-pair mints a fresh cubes.id but the same MAC – which is
+-- the same reasoning `cube_names` is keyed by MAC rather than by id.
+-- NULL for solves recorded before this column existed.
+
 CREATE TABLE solves (
     id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -49,10 +58,12 @@ CREATE TABLE solves (
     is_dnf INTEGER NOT NULL DEFAULT 0,
     penalty_ms INTEGER NOT NULL DEFAULT 0,
     move_count INTEGER NOT NULL DEFAULT 0,
-    ao5_times TEXT
+    ao5_times TEXT,
+    cube_mac TEXT
 );
 
 CREATE INDEX solves_user_solved_at ON solves(user_id, solved_at DESC);
+
 -- Ranking index. Column order mirrors the History "best/worst" ORDER BY
 -- exactly – (user_id, is_dnf, effective time) – which buys three separate
 -- things from one index:
@@ -85,10 +96,14 @@ CREATE INDEX solves_user_rank ON solves(user_id, is_dnf ASC, (duration_ms + pena
 -- is answered from the index alone without touching the table.
 CREATE INDEX solves_user_ao5 ON solves(user_id, ao5_ms) WHERE ao5_ms IS NOT NULL;
 
+-- "Solves done on this cube, newest first". Same shape as
+-- solves_user_solved_at with the MAC wedged in as a second equality, so
+-- filtering by cube keeps the date ordering for free.
+CREATE INDEX solves_user_cube ON solves(user_id, cube_mac, solved_at DESC);
 
 insert:
-INSERT INTO solves (user_id, solved_at, duration_ms, scramble, ao5_ms, ao5_times, fluency, extras, is_dnf, penalty_ms, move_count)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+INSERT INTO solves (user_id, solved_at, duration_ms, scramble, ao5_ms, ao5_times, fluency, extras, is_dnf, penalty_ms, move_count, cube_mac)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 -- SQLite-specific: returns the id of the most recently INSERTed row in
 -- the current connection. Used immediately after `insert` (in the same
@@ -107,6 +122,7 @@ bestDuration:
 -- The explicit `AS best` alias gives the generated row class a stable
 -- Kotlin property name, so changes to the SELECT expression don't
 -- silently rename the property.
+--
 -- Answered by `solves_user_rank` as a MIN() index seek – see that index's
 -- note. It is O(log n): a profile with 500k solves costs the same as one
 -- with 500, which is what makes it safe to re-read on every profile
@@ -181,6 +197,25 @@ SELECT * FROM solves WHERE user_id = :userId ORDER BY solved_at ASC, id ASC;
 
 updateAo5:
 UPDATE solves SET ao5_ms = :ao5Ms, ao5_times = :ao5Times WHERE id = :id;
+
+-- One cube's solves, newest first. The reason `solves_user_cube` exists:
+-- (user_id, cube_mac) are both equalities and solved_at is the next
+-- indexed column, so this pages straight off the index with no sort.
+pageByCubeDateDesc:
+SELECT * FROM solves WHERE user_id = :userId AND cube_mac = :cubeMac
+ORDER BY solved_at DESC LIMIT :limit OFFSET :offset;
+
+countForCube:
+SELECT COUNT(*) AS solve_count FROM solves WHERE user_id = :userId AND cube_mac = :cubeMac;
+
+-- Distinct cubes this profile has ever recorded a solve on, with a
+-- count, newest activity first. Feeds a "filter by cube" control.
+cubesUsed:
+SELECT cube_mac AS mac, COUNT(*) AS solve_count, MAX(solved_at) AS last_solved_at
+FROM solves
+WHERE user_id = :userId AND cube_mac IS NOT NULL
+GROUP BY cube_mac
+ORDER BY last_solved_at DESC;
 
 updatePenalty:
 -- Mark a solve as DNF, +2, or back to OK. Called from the post-solve

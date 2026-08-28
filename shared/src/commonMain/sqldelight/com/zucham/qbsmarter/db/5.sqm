@@ -1,0 +1,11 @@
+-- Schema v5 → v6: cube attribution.
+--
+-- `cube_mac` records which physical cube a solve was done on. It is the
+-- second and last column this schema appends to `solves`; see the note in
+-- `3.sqm` about keeping the ALTER order in step with Solves.sq.
+ALTER TABLE solves ADD COLUMN cube_mac TEXT;
+
+-- "Solves done on this cube, newest first" — same shape as
+-- solves_user_solved_at with the MAC wedged in as a second equality, so
+-- filtering by cube keeps the date ordering for free.
+CREATE INDEX solves_user_cube ON solves(user_id, cube_mac, solved_at DESC);

@@ -81,6 +81,19 @@ class SolveViewModel(
     private val timer = SolveTimer()
     private val inspection = InspectionTimer(viewModelScope)
 
+    /**
+     * MAC of the cube the running solve is being done on, captured when
+     * the timer starts rather than read back when it stops.
+     *
+     * The difference matters on a mid-solve disconnect. `activeMac` goes
+     * null the moment the link drops, so reading it at the end would
+     * attribute a solve that was demonstrably done on a particular cube
+     * to no cube at all — and a dropped link near the end of a solve is
+     * exactly the situation where the user most wants the record kept
+     * straight.
+     */
+    private var solveCubeMac: String? = null
+
     private val _phase = MutableStateFlow(SolvePhase.IDLE)
     val phase: StateFlow<SolvePhase> = _phase.asStateFlow()
 
@@ -351,6 +364,7 @@ class SolveViewModel(
         if (_phase.value == SolvePhase.IDLE) return
         timer.reset()
         inspection.cancel()
+        solveCubeMac = null
         _moveCount.value = 0
         _scrambleProgress.value = 0
         _deviationMoves.value = emptyList()
@@ -394,6 +408,7 @@ class SolveViewModel(
     fun newScramble() {
         timer.reset()
         inspection.cancel()
+        solveCubeMac = null
         _moveCount.value = 0
         cube.resetState()
         logicalState = CubeState.SOLVED
@@ -433,6 +448,7 @@ class SolveViewModel(
         logicalState = CubeState.SOLVED
         timer.reset()
         inspection.cancel()
+        solveCubeMac = null
         _moveCount.value = 0
         _scrambleProgress.value = 0
         _deviationMoves.value = emptyList()
@@ -606,6 +622,7 @@ class SolveViewModel(
             SolvePhase.READY, SolvePhase.INSPECTION -> {
                 inspection.cancel()
                 _phase.value = SolvePhase.RUNNING
+                solveCubeMac = connectionSummary.value.cube?.mac
                 timer.startTicker(viewModelScope)
                 timer.observeMove(move.cubeTimestamp, move.deviceTimestamp)
                 _moveCount.value += 1
@@ -733,6 +750,8 @@ class SolveViewModel(
         // because a late event arrived between the two reads.
         val moveCount = _moveCount.value.toLong()
         val tps = if (durationMs > 0) moveCount * 1000.0 / durationMs else null
+        val cubeMac = solveCubeMac
+        solveCubeMac = null
 
         val uid = activeProfile.idSnapshot() ?: run {
             log.w { "finishSolve: no active profile, dropping" }
@@ -764,6 +783,7 @@ class SolveViewModel(
             scramble = _scramble.value,
             fluency = tps,
             moveCount = moveCount,
+            cubeMac = cubeMac,
         )
 
         // Surface the just-finished solve so the post-solve

@@ -28,7 +28,9 @@ enum class SolveSort { DATE_DESC, DATE_ASC, BEST_TIME, WORST_TIME }
  * NOT consume `moveCount` – it's a History-only field by product spec.
  *
  * `ao5Times` is the five effective times `ao5Ms` was computed from, in
- * the encoding [Ao5] defines; read it with [ao5TimesList].
+ * the encoding [Ao5] defines; read it with [ao5TimesList]. `cubeMac`
+ * identifies the physical cube the solve was done on, or null for solves
+ * recorded before the column existed.
  */
 data class SolveRow(
     val id: Long,
@@ -43,6 +45,7 @@ data class SolveRow(
     val penaltyMs: Long,
     val moveCount: Long,
     val ao5Times: String? = null,
+    val cubeMac: String? = null,
 ) : Ao5Entry {
     /** Total displayed time. DNFs still expose a number for sorting; UI shows "DNF". */
     override val effectiveMs: Long get() = durationMs + penaltyMs
@@ -67,6 +70,7 @@ private fun Solves.toRow() = SolveRow(
     penaltyMs = penalty_ms,
     moveCount = move_count,
     ao5Times = ao5_times,
+    cubeMac = cube_mac,
 )
 
 class SolvesRepository(
@@ -100,10 +104,11 @@ class SolvesRepository(
         userId: String, solvedAt: Long, durationMs: Long, scramble: String,
         fluency: Double?, extras: String? = null,
         isDnf: Boolean = false, penaltyMs: Long = 0L, moveCount: Long = 0L,
+        cubeMac: String? = null,
     ): Long = db.transactionWithResult {
         db.solvesQueries.insert(
             userId, solvedAt, durationMs, scramble, null, null, fluency, extras,
-            if (isDnf) 1L else 0L, penaltyMs, moveCount,
+            if (isDnf) 1L else 0L, penaltyMs, moveCount, cubeMac,
         )
         val id = db.solvesQueries.lastInsertedId().executeAsOne()
         val ao5 = computeAo5For(userId, solvedAt, id)
@@ -133,10 +138,11 @@ class SolvesRepository(
         userId: String, solvedAt: Long, durationMs: Long, scramble: String,
         fluency: Double?, extras: String? = null,
         isDnf: Boolean = false, penaltyMs: Long = 0L, moveCount: Long = 0L,
+        cubeMac: String? = null,
     ): Long = db.transactionWithResult {
         db.solvesQueries.insert(
             userId, solvedAt, durationMs, scramble, null, null, fluency, extras,
-            if (isDnf) 1L else 0L, penaltyMs, moveCount,
+            if (isDnf) 1L else 0L, penaltyMs, moveCount, cubeMac,
         )
         db.solvesQueries.lastInsertedId().executeAsOne()
     }
@@ -266,4 +272,35 @@ class SolvesRepository(
     /** One solve by id, or null if it has been deleted. */
     fun byId(id: Long): SolveRow? =
         db.solvesQueries.selectById(id).executeAsOneOrNull()?.toRow()
+
+    /**
+     * One cube's solves, newest first. Paged the same way as [page]; the
+     * caller supplies the MAC from [cubesUsed].
+     */
+    fun pageForCube(userId: String, cubeMac: String, limit: Long, offset: Long): List<SolveRow> =
+        db.solvesQueries.pageByCubeDateDesc(userId, cubeMac, limit, offset)
+            .executeAsList().map(Solves::toRow)
+
+    /**
+     * How many solves this profile has recorded on one cube.
+     *
+     * `executeAsOne()` yields the Long directly, with no wrapper class to
+     * unpack. SQLDelight only generates a row class for a single-column
+     * query when that column is **nullable** — it needs somewhere to put
+     * a null that is a value rather than an absent row. `COUNT(*)` is
+     * never null, so this one comes back bare, while `bestDuration` and
+     * `bestAo5` (both `MIN(...)`) come back wrapped and are read as
+     * `.executeAsOne().best`.
+     */
+    fun countForCube(userId: String, cubeMac: String): Long =
+        db.solvesQueries.countForCube(userId, cubeMac).executeAsOne()
+
+    /** Distinct cubes this profile has solved on, most recent first. */
+    fun cubesUsed(userId: String): List<CubeUsage> =
+        db.solvesQueries.cubesUsed(userId).executeAsList().map {
+            CubeUsage(mac = it.mac ?: "", solveCount = it.solve_count, lastSolvedAt = it.last_solved_at ?: 0L)
+        }
 }
+
+/** One cube's share of a profile's solve history. */
+data class CubeUsage(val mac: String, val solveCount: Long, val lastSolvedAt: Long)

@@ -339,9 +339,10 @@ class SettingsViewModel(
      *  - Solves: appended, **with full-field deduplication** within the
      *    target profile. Two solves are considered identical when every
      *    *recorded* field matches: `solvedAt`, `durationMs`, `scramble`,
-     *    `fluency`, `extras`, `isDnf`, `penaltyMs`, `moveCount`. The
-     *    derived `ao5Ms` is not compared and not imported; the whole
-     *    profile's averages are rebuilt once the batch is in.
+     *    `fluency`, `extras`, `isDnf`, `penaltyMs`, `moveCount`,
+     *    `cubeMac`. The derived `ao5Ms` is not compared and not
+     *    imported; the whole profile's averages are rebuilt once the
+     *    batch is in.
      *    The solve's auto-generated DB `id` is intentionally NOT part of
      *    the fingerprint – it's local to each DB and would never match
      *    across exports. `moveCount` participates despite being a
@@ -426,6 +427,7 @@ class SettingsViewModel(
                     isDnf = s.isDnf,
                     penaltyMs = s.penaltyMs,
                     moveCount = s.moveCount,
+                    cubeMac = s.cubeMac,
                 )
             }
 
@@ -473,7 +475,7 @@ class SettingsViewModel(
         solvedAt = row.solvedAt, durationMs = row.durationMs, scramble = row.scramble,
         ao5Ms = row.ao5Ms, fluency = row.fluency, extras = row.extras,
         isDnf = row.isDnf, penaltyMs = row.penaltyMs, moveCount = row.moveCount,
-        ao5Times = row.ao5Times,
+        cubeMac = row.cubeMac, ao5Times = row.ao5Times,
     )
 
     private fun toExportCube(cube: PairedCube) = ExportCube(
@@ -566,6 +568,13 @@ data class ExportSolve(
     // don't merge.
     val moveCount: Long = 0L,
     /**
+     * Which physical cube the solve was done on. Defaulted so bundles
+     * written before the column existed parse unchanged, and part of the
+     * dedup fingerprint because it is a recorded fact about the solve —
+     * two identical times on two different cubes are two solves.
+     */
+    val cubeMac: String? = null,
+    /**
      * The five times behind [ao5Ms], in the encoding
      * `com.zucham.qbsmarter.domain.stats.Ao5` defines. Exported for
      * completeness; the importer does **not** restore it, because both
@@ -624,7 +633,8 @@ data class ExportCube(
  * are different recordings – without `moveCount` here, importing a
  * bundle that contains both would silently keep only one. For pre-
  * moveCount bundles the field defaults to 0L on both sides of the
- * comparison, so older bundles round-trip unchanged.
+ * comparison, so older bundles round-trip unchanged. `cubeMac` is in for
+ * the same reason and defaults the same way.
  *
  * `ao5Ms` was in this list and has been taken out, because it stopped
  * being a fact about the solve and became a fact about its *neighbours*.
@@ -648,16 +658,17 @@ private data class SolveFingerprint(
     val isDnf: Boolean,
     val penaltyMs: Long,
     val moveCount: Long,
+    val cubeMac: String?,
 )
 
 private fun SolveRow.toFingerprint() = SolveFingerprint(
     solvedAt = solvedAt, durationMs = durationMs, scramble = scramble,
     fluency = fluency, extras = extras,
-    isDnf = isDnf, penaltyMs = penaltyMs, moveCount = moveCount,
+    isDnf = isDnf, penaltyMs = penaltyMs, moveCount = moveCount, cubeMac = cubeMac,
 )
 
 private fun ExportSolve.toFingerprint() = SolveFingerprint(
     solvedAt = solvedAt, durationMs = durationMs, scramble = scramble,
     fluency = fluency, extras = extras,
-    isDnf = isDnf, penaltyMs = penaltyMs, moveCount = moveCount,
+    isDnf = isDnf, penaltyMs = penaltyMs, moveCount = moveCount, cubeMac = cubeMac,
 )
