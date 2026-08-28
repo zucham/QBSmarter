@@ -950,9 +950,11 @@ The BLE side doesn't track which MAC is *actually* on the wire. So `connectedCub
 
 Plain `LazyColumn` driven by a windowed `StateFlow` in the VM. Each call to `maybeLoadMore()` (fired via `snapshotFlow` watching the visible window) appends up to `PAGE_SIZE = 50` rows. `PREFETCH_TRIGGER = 10` items from the bottom.
 
-Rows are swipe-to-dismiss (left-to-right only) with a confirmation dialog. Tap opens a detail dialog (date, scramble, ao5 snapshot, fluency, turn count); the detail dialog has a Delete button that goes through the same confirmation. The turn-count line is hidden for solves that pre-date the `move_count` column (`> 0` guard) so historical rows aren't misleadingly shown as "Turns: 0".
+Rows are swipe-to-dismiss (end-to-start only — right-to-left in LTR locales) with a confirmation dialog. Tap opens a detail dialog (date, scramble, ao5 snapshot, fluency, turn count); the detail dialog has a Delete button that goes through the same confirmation. The turn-count line is hidden for solves that pre-date the `move_count` column (`> 0` guard) so historical rows aren't misleadingly shown as "Turns: 0".
 
-A two-effect pattern handles the swipe state: one effect raises the delete request when `state.currentValue == StartToEnd`; a second resets the row to settled when the global `pendingDeleteId` no longer points at this row (confirm or cancel). Same pattern in `SettingsScreen.ProfileRow`.
+A two-effect pattern handles the swipe state: one effect raises the delete request when `state.currentValue == EndToStart`; a second resets the row to settled when the global `pendingDeleteId` no longer points at this row (confirm or cancel). Same pattern in `SettingsScreen.ProfileRow`.
+
+**Why end-to-start.** Start-to-end is the navigation drawer's open gesture. A drag that begins on a list row and travels that way is ambiguous, and whichever handler wins the race, the other one feels broken — the drawer peeking open behind a half-swiped row, or a row refusing to move. End-to-start belongs to nothing else on these screens, so delete takes it outright. `SwipeToDismissBox`'s direction values are layout-relative rather than absolute, so the two gestures stay mirror images of each other under an RTL layout instead of colliding there. The red `Delete` background aligns its label to `CenterEnd`, the edge the row uncovers as it travels away.
 
 Sort options (chips at the top): newest, oldest, best time, worst time. Sort change scrolls back to the top.
 
@@ -1005,7 +1007,7 @@ The "disconnect on profile switch" is what makes `SolveViewModel.abortToIdle()` 
 
 ##### `key(profile.id)` around `ProfileRow`
 
-Each `ProfileRow` is wrapped in `key(profile.id) { ... }` inside the `for (profile in sorted)` loop. Without this, Compose's slot table reuses the per-position composition state when the list reorders – and after deleting the active profile A, the next profile B is promoted to active and slides up to slot 0, with A's mid-dismiss `rememberSwipeToDismissBoxState` still hanging around. The result was a visible bug: B rendered already-swiped, AND the delete-confirmation dialog re-fired for B (because `LaunchedEffect(state.currentValue)` ran again for the new identity while `currentValue` was still `StartToEnd`). Keying by id gives each profile its own composition region, so B always starts at `Settled` regardless of what A's row was doing.
+Each `ProfileRow` is wrapped in `key(profile.id) { ... }` inside the `for (profile in sorted)` loop. Without this, Compose's slot table reuses the per-position composition state when the list reorders – and after deleting the active profile A, the next profile B is promoted to active and slides up to slot 0, with A's mid-dismiss `rememberSwipeToDismissBoxState` still hanging around. The result was a visible bug: B rendered already-swiped, AND the delete-confirmation dialog re-fired for B (because `LaunchedEffect(state.currentValue)` ran again for the new identity while `currentValue` was still `EndToStart`). Keying by id gives each profile its own composition region, so B always starts at `Settled` regardless of what A's row was doing.
 
 ##### Per-profile settings dialog (`ProfileSettingsDialog`)
 

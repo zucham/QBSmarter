@@ -167,7 +167,7 @@ The detail dialog also contains a **Delete** button for removing the record (wit
 **Deleting a record** is possible in two ways:
 
 1. Tap the record, open the detail dialog, and tap **`Delete`**.
-2. Swipe the record to the right - a red background with the "Delete" label appears, and after dragging further a confirmation dialog opens.
+2. Swipe the record to the left - a red background with the "Delete" label appears, and after dragging further a confirmation dialog opens.
 
 In both cases the app requires a confirmation before deleting, so you don't have to worry about accidentally erasing precious records.
 
@@ -185,7 +185,7 @@ In the profile list, the active profile is always at the top and is color-highli
     - edit the profile's display name,
     - see the total solve count for the profile,
     - export the profile's data to a JSON file.
-- **Trash icon** (at the end of the row) - deletes the profile. Deletion is also possible by swiping the profile row to the right. Profile deletion is irreversible, and all related data (history, cubes, settings) is deleted with it.
+- **Trash icon** (at the end of the row) - deletes the profile. Deletion is also possible by swiping the profile row to the left. Profile deletion is irreversible, and all related data (history, cubes, settings) is deleted with it.
 
 > **Note**: The app guarantees that at least one profile always exists. If you delete the last existing profile, a new empty profile is automatically created.
 

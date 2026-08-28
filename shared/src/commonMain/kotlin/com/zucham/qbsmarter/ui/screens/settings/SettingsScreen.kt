@@ -358,7 +358,7 @@ private fun ProfilePicker(
             // B render in the swiped position AND immediately re-fire
             // the delete confirmation dialog (the LaunchedEffect on
             // `state.currentValue` runs again for the new profile while
-            // the value is still StartToEnd). Keying by id forces a
+            // the value is still EndToStart). Keying by id forces a
             // fresh state instance per profile identity, so B starts
             // at Settled regardless of what A's row was doing.
             key(profile.id) {
@@ -443,9 +443,10 @@ private fun ProfilePicker(
  *
  *   [profile name (+ "Active" pill if active)]   [delete icon]
  *
- * Swipe right reveals an "Delete" red background and triggers
- * confirmation; matches the History screen's `SwipeableSolveItem`
- * pattern so the whole app feels consistent. Confirmation is handled
+ * Swiping the row towards its start edge (right-to-left in LTR locales)
+ * reveals a "Delete" red background and triggers confirmation; matches
+ * the History screen's `SwipeableSolveItem` pattern so the whole app
+ * feels consistent. Confirmation is handled
  * upstream – this row only fires [onDelete] (which raises the
  * confirmation dialog) and resets its swipe state once that dialog is
  * dismissed.
@@ -472,13 +473,13 @@ private fun ProfileRow(
     // Raise the delete request when the user swipes past the threshold.
     // We deliberately do NOT call `state.reset()` here; it's an animated
     // suspending operation, and SwipeToDismissBox snaps to the dismissed
-    // position the moment `currentValue` settles at StartToEnd, so a
+    // position the moment `currentValue` settles at EndToStart, so a
     // reset call here can race with the dismiss animation and leave the
     // row visually stuck. Instead, the second LaunchedEffect below resets
     // the row when the global pending pointer clears (confirm or cancel)
     // – same pattern as `SwipeableSolveItem` in HistoryScreen.
     LaunchedEffect(state.currentValue) {
-        if (state.currentValue == SwipeToDismissBoxValue.StartToEnd) {
+        if (state.currentValue == SwipeToDismissBoxValue.EndToStart) {
             onDelete()
         }
     }
@@ -495,8 +496,11 @@ private fun ProfileRow(
 
     SwipeToDismissBox(
         state = state,
-        enableDismissFromStartToEnd = true,
-        enableDismissFromEndToStart = false,
+        // End-to-start only, matching HistoryScreen's rows – start-to-end
+        // is the navigation drawer's open gesture and the two would race.
+        // See `SwipeableSolveItem` for the full reasoning.
+        enableDismissFromStartToEnd = false,
+        enableDismissFromEndToStart = true,
         backgroundContent = { ProfileSwipeBackground() },
     ) {
         ProfileRowContent(
@@ -519,7 +523,8 @@ private fun ProfileSwipeBackground() {
                 shape = RoundedCornerShape(8.dp),
             )
             .padding(horizontal = 24.dp),
-        contentAlignment = Alignment.CenterStart,
+        // Label on the end edge – the side the row uncovers as it leaves.
+        contentAlignment = Alignment.CenterEnd,
     ) {
         Text(
             text = stringResource(Res.string.profile_delete),

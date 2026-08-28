@@ -308,7 +308,7 @@ private fun SwipeableSolveItem(
     )
 
     LaunchedEffect(state.currentValue) {
-        if (state.currentValue == SwipeToDismissBoxValue.StartToEnd) {
+        if (state.currentValue == SwipeToDismissBoxValue.EndToStart) {
             onSwipedToDelete()
         }
     }
@@ -321,8 +321,16 @@ private fun SwipeableSolveItem(
 
     SwipeToDismissBox(
         state = state,
-        enableDismissFromStartToEnd = true,
-        enableDismissFromEndToStart = false,
+        // End-to-start only (right-to-left in LTR locales). Start-to-end
+        // is the navigation drawer's open gesture: a drag that begins on
+        // a list row and travels that way is ambiguous, and whichever
+        // handler wins the race, one of the two feels broken. Dragging
+        // the other way belongs to nothing else, so delete gets it
+        // outright. Direction-relative rather than hard "right to left"
+        // so the pair stays non-conflicting under an RTL layout, where
+        // both gestures mirror together.
+        enableDismissFromStartToEnd = false,
+        enableDismissFromEndToStart = true,
         backgroundContent = { SwipeBackground() },
     ) {
         SolveListItem(row, onClick = onTap)
@@ -339,7 +347,9 @@ private fun SwipeBackground() {
                 shape = RoundedCornerShape(8.dp),
             )
             .padding(horizontal = 24.dp),
-        contentAlignment = Alignment.CenterStart,
+        // The label sits on the end edge – the side the row uncovers as
+        // it travels away from it.
+        contentAlignment = Alignment.CenterEnd,
     ) {
         Text(
             text = stringResource(Res.string.history_delete),

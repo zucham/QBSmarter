@@ -167,7 +167,7 @@ V detailním dialogu najdete i tlačítko **Smazat** pro odstranění záznamu (
 **Smazání záznamu** je možné dvěma způsoby:
 
 1. Klepnutím na záznam, otevřením detailního dialogu a klepnutím na **`Smazat`**.
-2. Potažením záznamu doprava - objeví se červené pozadí s nápisem "Smazat" a po dotažení dále se otevře potvrzovací dialog.
+2. Potažením záznamu doleva - objeví se červené pozadí s nápisem "Smazat" a po dotažení dále se otevře potvrzovací dialog.
 
 V obou případech aplikace před smazáním vyžaduje potvrzení, takže se nemusíte obávat náhodného mazání cenných záznamů.
 
@@ -185,7 +185,7 @@ V seznamu profilů je váš aktivní profil vždy nahoře a je barevně zvýrazn
   - upravit zobrazované jméno profilu,
   - vidět celkový počet složení v rámci profilu,
   - exportovat data tohoto profilu do souboru JSON.
-- **Koš** (na konci řádku) - smaže profil. Smazání lze také provést potažením profilu doprava. Mazání profilu je nevratné a smažou se s ním všechna související data (historie, kostky, nastavení).
+- **Koš** (na konci řádku) - smaže profil. Smazání lze také provést potažením profilu doleva. Mazání profilu je nevratné a smažou se s ním všechna související data (historie, kostky, nastavení).
 
 > **Pozor**: Aplikace zaručuje existenci alespoň jednoho profilu. Pokud smažete poslední existující profil, automaticky je vytvořen nový prázdný profil.
 
