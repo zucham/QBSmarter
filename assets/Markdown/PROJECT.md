@@ -28,6 +28,7 @@ This document captures everything a developer should know to work on QBSmarter p
 9. [Database schema](#database-schema)
    - [Per-profile cube names](#per-profile-cube-names)
    - [Migrations](#migrations)
+   - [Foreign keys](#foreign-keys)
 10. [Permissions, edge-to-edge & system bars](#permissions-edge-to-edge--system-bars)
 11. [Internationalisation](#internationalisation)
 12. [Theming](#theming)
@@ -579,7 +580,7 @@ Three cases handled:
 
 #### `UserRepository.deleteProfile`
 
-Enforces the "always at least one profile" invariant. If you delete the only profile, a fresh empty one is auto-created and made active. If you delete the active profile, the next-most-recent profile becomes active. Cubes/solves/settings cascade-delete via FK.
+Enforces the "always at least one profile" invariant. If you delete the only profile, a fresh empty one is auto-created and made active. If you delete the active profile, the next-most-recent profile becomes active. Cubes/solves/settings/names cascade-delete via FK — which, as of v1.3.0, is finally true rather than merely intended; see *Foreign keys*.
 
 #### `UserRepository.observeActive` and the rename-propagation fix
 
@@ -1360,6 +1361,7 @@ created_at                                           name (advertised)         s
 - `cubes.name` is the name the cube **advertises** over BLE — hardware-level, shared by every profile. A user's own name for a cube lives in `cube_names`, keyed by profile. See *Per-profile cube names* below.
 - `cubes.upsert` sets `name = COALESCE(excluded.name, name)`: take the newly-advertised value whenever the cube reports one, keep the last one we saw when it doesn't. This clause used to be the other way round (fill-only, `COALESCE(name, excluded.name)`) because user renames lived in this column and every reconnect would otherwise have stamped the manufacturer's name back over them. With renames moved out to `cube_names`, the clause went back to meaning what it says.
 - `cubes.vendor` is the persisted form of `CubeVendor` (`'gan'` / `'moyu'`), `NOT NULL DEFAULT 'gan'`. Stamped by the orchestrator via `updateVendor(mac, vendor)` right after service-UUID-based detection, well before the INFO round-trip lands. The `'gan'` default covers the brief pre-detection window for newly-paired rows and any pre-feature exports (which deserialise as `vendor = "gan"` by default).
+- **Foreign keys are enforced.** `DriverFactory` (Android) passes an `AndroidSqliteDriver.Callback` whose `onConfigure` calls `setForeignKeyConstraintsEnabled(true)`. Until v1.3.0 nothing did, so *every* `ON DELETE CASCADE` in this schema was inert and `deleteProfile` silently orphaned the profile's cubes, solves and settings. See *Foreign keys* below.
 - `solves` indexes: `(user_id, solved_at DESC)` and `(user_id, duration_ms ASC)`. Both used by the History sort modes.
 - `solves.bestDuration` returns `MIN(duration_ms + penalty_ms)` skipping DNFs. Aliased `AS best` so the generated row class has a stable Kotlin property name.
 - `solves.move_count` (default 0) is the total cube turns recorded during the solve. Already counted at runtime by `SolveViewModel` for the live TPS calculation (`fluency = moveCount * 1000 / durationMs`); persisting it lets the History detail dialog show "Turns: N" alongside the time. **Not consumed by any stat** – it's a History-only field by product spec. The 0 default keeps the column SQL-compatible with old call sites (e.g. tests that insert via the repo without the new arg) and lets the History dialog hide the row for pre-feature data via a `> 0` guard.
@@ -1389,10 +1391,21 @@ The `.sq` files always describe the *current* schema. Each `.sqm` is a delta app
 | file | version | what it does |
 |---|---|---|
 | `1.sqm` | 1 → 2 | creates `cube_names` and copies each existing `cubes.name` across as a per-profile override |
+| `2.sqm` | 2 → 3 | deletes the rows orphaned by profile deletions made while foreign keys were unenforced |
 
 **`1.sqm`.** Creates `cube_names` and carries every existing `cubes.name` across as an override belonging to the profile that currently owns the cube: whoever renamed a cube keeps seeing their name, nobody else inherits it. Cubes whose owning profile no longer exists are skipped — there is no profile for the name to belong to, and filtering here rather than relying on a cleanup elsewhere keeps this file correct under foreign-key enforcement on its own, which matters for a file that will still be run years after it was written.
 
 `cubes.name` is deliberately **not** cleared. Post-migration it means "the advertised name", and for a renamed cube it briefly holds the user's label instead — harmless, because the owning profile now reads its name from `cube_names`, and the next connect overwrites the column with the real advertised name. Clearing it would be worse: it would blank the fallback name for every cube never connected again.
+
+**`2.sqm`.** Deletes rows in `settings`, `solves`, `cubes` and `cube_names` whose `user_id` no longer exists — the wreckage of every profile deletion made while foreign keys were unenforced (see *Foreign keys*). The pragma alone does not clean this up: enforcement validates what you write, not what is already stored, so without the sweep those rows would outlive every future release, counted by `PRAGMA foreign_key_check` and by nothing else. `cube_names` cannot actually hold orphans — `1.sqm` filters them out and every write since goes through an enforced key — and is swept anyway, because a sweep naming four tables reads better than three tables and a paragraph about the fourth.
+
+### Foreign keys
+
+SQLite defaults foreign-key enforcement **off**, `AndroidSqliteDriver` does not turn it on, and until v1.3.0 nothing else did. Every `ON DELETE CASCADE` in this schema was decorative: `UserRepository.deleteProfile` left the profile's cubes, solves, settings and names behind, and `app_state.active_user_id`'s `ON DELETE SET NULL` never fired (the repository survived only because it re-checks the pointer afterwards regardless).
+
+The reconstruction tables are what forced the fix. They are the largest rows in the database and they hang off `solves(id)`, so every solve deleted from History would have leaked its blobs permanently. `DriverFactory` now passes a callback that enables the pragma in `onConfigure` — the only correct hook, since SQLite refuses to change it inside a transaction and the framework calls `onConfigure` before `onCreate`/`onUpgrade`.
+
+Turning it on fixes every future deletion and nothing at all about the past, so the rows already orphaned are swept by a migration of their own: see *Migrations*.
 
 ### Setting keys
 

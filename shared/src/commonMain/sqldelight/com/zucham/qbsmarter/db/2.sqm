@@ -1,0 +1,25 @@
+-- Schema v2 → v3: sweep the rows orphaned while foreign keys were off.
+--
+-- Every child table in this schema declares ON DELETE CASCADE, and none
+-- of it has ever fired. SQLite leaves foreign-key enforcement off unless
+-- something turns it on, nothing did, and `AndroidSqliteDriver` does not
+-- do it for you — so `UserRepository.deleteProfile` has been leaving the
+-- deleted profile's cubes, solves and settings behind. Invisible, but
+-- present, and referenced by nothing.
+--
+-- `DriverFactory` now enables the pragma. That fixes every future
+-- deletion and nothing at all about the past: enforcement validates what
+-- you write, not what is already stored, so without this sweep the old
+-- rows would sit there for the life of the database — counted by
+-- `PRAGMA foreign_key_check` and by nothing else.
+--
+-- `cube_names` cannot actually hold orphans: `1.sqm` filters them out on
+-- the way in, and every write since goes through an enforced foreign key.
+-- It is swept anyway. This file is the one place that answers "what
+-- happened to what the missing cascades left behind", and a sweep that
+-- names four tables and finds nothing in one of them reads better than
+-- three tables and a paragraph explaining the fourth.
+DELETE FROM settings   WHERE user_id NOT IN (SELECT id FROM users);
+DELETE FROM solves     WHERE user_id NOT IN (SELECT id FROM users);
+DELETE FROM cubes      WHERE user_id NOT IN (SELECT id FROM users);
+DELETE FROM cube_names WHERE user_id NOT IN (SELECT id FROM users);
