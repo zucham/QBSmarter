@@ -47,7 +47,7 @@ android {
         minSdk = libs.versions.android.minSdk.get().toInt()
         targetSdkVersion(rootProject.extra["defaultTargetSdkVersion"] as Int)
         versionCode = 7
-        versionName = "1.1.2"
+        versionName = "1.2.0"
     }
     // -- Release signing --------------------------------------------------
     //
