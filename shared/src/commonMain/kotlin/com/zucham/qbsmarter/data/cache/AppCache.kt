@@ -30,7 +30,7 @@ import kotlinx.coroutines.flow.stateIn
  *   • the recent-100 solves for stats
  *   • full solve count for the active profile
  *   • best (effective) duration for the active profile
- *   • settings map for the active profile
+ *   • settings map for the active profile (always observed – see [settings])
  *
  * **Why this layer exists.** Every screen that reads any of the above used
  * to open its own SQLDelight observer through a Repository. With the cache
@@ -47,7 +47,8 @@ import kotlinx.coroutines.flow.stateIn
  * **Disable semantics.** When the user toggles the "Use caching" setting
  * off, [setEnabled(false)] is called. The cached StateFlows immediately
  * emit empty/null, the underlying observers are cancelled, and reads that
- * still arrive at the cache delegate straight to the repository.
+ * still arrive at the cache delegate straight to the repository. The
+ * [settings] flow is the documented exception – see its own note.
  *
  * **Profile switch behaviour.** Every cache flow keys off
  * [ActiveProfile.id] via `flatMapLatest`. Switching profiles cancels the
@@ -112,10 +113,36 @@ class AppCache(
             solvesRepo.bestDuration(uid)
         }.stateIn(scope, SharingStarted.Eagerly, null)
 
-    /** Settings map for the active profile. Empty when disabled / no active profile. */
+    /**
+     * Settings map for the active profile. Empty only when there is no
+     * active profile.
+     *
+     * **Deliberately NOT [gated] on [enabled]**, unlike every other flow
+     * here. It is the one exception, for two reasons.
+     *
+     * The cost of keeping it is the smallest of the lot: a profile's
+     * settings are a handful of rows, and the flag's purpose is to stop
+     * the app holding *hot bulk* data (cube lists, solve windows) in
+     * memory.
+     *
+     * The cost of gating it was a broken Settings screen. Every control
+     * there renders `settings[key] ?: <default>` off this map, so with
+     * caching off the map went empty and every control displayed its
+     * default instead of the stored value. That included the caching
+     * toggle itself: switch it off and it sprang back to showing "on",
+     * so tapping it again wrote `false` a second time and the setting
+     * could never be turned back on from the UI. A flow whose emptiness
+     * is indistinguishable from "everything is at its default" cannot be
+     * gated behind a user-visible flag.
+     *
+     * The synchronous accessors below still honour [enabled] and go to
+     * the repository when it is off — those serve callers who asked not
+     * to be served out of memory. This flow serves the screen that shows
+     * the user what is actually in the database, which is a different
+     * question.
+     */
     val settings: StateFlow<Map<String, String>> =
         forActive { uid -> settingsRepo.observeAll(uid) }
-            .gated(emptyMap())
             .stateIn(scope, SharingStarted.Eagerly, emptyMap())
 
     init {

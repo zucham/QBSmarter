@@ -615,9 +615,15 @@ In-memory cache for hot reads. When enabled (default), holds `StateFlow` snapsho
 - `bestDurationMs` – effective best for active profile
 - `settings` – settings key/value map for active profile
 
-Each flow is gated by `enabled` AND keyed off `activeProfile.id` via `flatMapLatest`. Profile switch = automatic cancellation + restart on the new id, no manual invalidation.
+Every flow is keyed off `activeProfile.id` via `flatMapLatest`. Profile switch = automatic cancellation + restart on the new id, no manual invalidation.
 
-When `setEnabled(false)` is called, gated flows emit defaults (empty/null/0) and stop re-observing. Synchronous typed reads (`boolSetting`, `snapshotPairedCubes`) fall through to the repository. Toggle back on → observers automatically resubscribe.
+All of them except `settings` are additionally gated by `enabled`. When `setEnabled(false)` is called, gated flows emit defaults (empty/null/0) and stop re-observing. Synchronous typed reads (`boolSetting`, `snapshotPairedCubes`) fall through to the repository. Toggle back on → observers automatically resubscribe.
+
+##### Why `settings` is not gated
+
+It used to be, and that was a bug. Every control on the Settings screen renders `settings[key] ?: <default>`, so with caching off the map went empty and each control displayed its default instead of the stored value — including the caching toggle itself, which sprang back to showing "on". Tapping it then wrote `false` a second time, and caching could never be turned back on from the UI.
+
+The general lesson: a flow whose empty state is indistinguishable from "everything is at its default" cannot be gated behind a user-visible flag. The specific trade is also lopsided — a profile's settings are a handful of rows, and the flag exists to stop the app holding hot *bulk* data (cube lists, solve windows) in memory. The synchronous accessors still honour `enabled`, because those serve callers who asked not to be served out of memory; the flow serves the screen that shows the user what is actually in the database, which is a different question.
 
 **History solves are NOT cached.** A profile may have thousands; the History screen uses windowed pagination.
 
