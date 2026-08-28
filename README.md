@@ -123,8 +123,8 @@ and comfort of use, but there are many areas in which it lacks.
 
 Here is a quick, priority-sorted list of future goals and features:
 
-- **Wider hardware support**. Currently, only certain GAN cubes are supported.
-I want to expand to as many vendors/models as possible.
+- **Wider hardware support**. The app currently supports GAN smart cubes (Gen2/3/4 BLE protocols)
+and the MoYu WeiLong V10 AI. I want to expand to as many vendors/models as possible.
 If your model is supported by csTimer and you want to speed up its adoption to QBSmarter,
 please do contant me if you can help with testing.
 - **Fully WCA-compliant scrambles**. Currently, the app does not follow the official methods to reach
@@ -211,8 +211,8 @@ versions](assets/Markdown/PROJECT.md#build-dependencies-versions).
 
 ### What this app doesn't do (yet)
 
-- **Limited hardware support.** Only GAN smart cubes are supported for now,
-  and only over the Gen2/3/4 BLE protocols. Other vendors or e.g. any
+- **Limited hardware support.** GAN smart cubes (Gen2/3/4 BLE protocols)
+  and the MoYu WeiLong V10 AI are supported today. Other vendors and e.g. any
   smart timers are not handled yet.
 - **Limited solve analysis and statistics.** The most popular speedcubing
   metrics &ndash; step times (cross, F2L, OLL, PLL), inspection time recording,
@@ -314,9 +314,9 @@ Headline versions:
 The architecture document
 [`assets/Markdown/PROJECT.md`](assets/Markdown/PROJECT.md) is the deep dive.
 It covers the module layout, the layered architecture, the BLE pitfalls,
-the GAN Gen2/3/4 protocol details, the database schema, the i18n setup, the
-theming model, and the conventions used throughout the codebase. New
-contributors should read it once, then refer back as needed.
+the GAN Gen2/3/4 and MoYu V10 AI protocol details, the database schema,
+the i18n setup, the theming model, and the conventions used throughout the
+codebase. New contributors should read it once, then refer back as needed.
 
 Its vast complexity is one of the side effects of me having trouble while creating
 QBSmarter - the domain of popular smart cubes was poorly documented. A collection
@@ -424,6 +424,11 @@ Three projects in particular shaped what QBSmarter ended up being:
   against this library, and the QBSmarter `PROJECT.md` exists in part to
   give the same information a permanent, well-organised home for future
   readers.
+- **[weilong-v10-ai-protocol](https://github.com/lukeburong/weilong-v10-ai-protocol)**
+  by `lukeburong`. The reverse-engineered protocol writeup for the
+  MoYu WeiLong V10 AI smart cube. Service/characteristic UUIDs, AES
+  root key + IV, packet formats, and quaternion-decoding details all
+  come from this writeup.
 - **[Korender](https://github.com/zakgof/korender)** (Apache-2.0). The
   Kotlin Multiplatform 3D engine that powers the live cube view. It made
   the 3D part of this project tractable for a single developer; without it,

@@ -1,18 +1,21 @@
 package com.zucham.qbsmarter.domain.driver
 
 import com.zucham.qbsmarter.domain.driver.gan.GanGeneration
+import com.zucham.qbsmarter.domain.driver.moyu.MoyuConstants
 
 /**
- * Vendor (manufacturer) of a smart cube. Today one vendor is supported:
+ * Vendor (manufacturer) of a smart cube. Today two vendors are supported:
  *
  *   | Vendor | Cubes (non-exhaustive)                               |
  *   |--------|-------------------------------------------------------|
  *   | GAN    | i Carry, i Carry S, i 3, i Carry 2, GAN12 ui,        |
  *   |        | GAN12 ui Maglev, GAN14 ui FreePlay, GAN Mini ui      |
  *   |        | FreePlay, Monster Go 3Ai                              |
+ *   | MOYU   | MoYu WeiLong V10 AI (device name prefix `WCU_MY`)    |
  *
- * A vendor's wire protocol is its own – two vendors share neither
- * service UUIDs nor packet formats. Each vendor gets
+ * A vendor's wire protocol is its own – they share neither service UUIDs
+ * nor packet formats, and only by coincidence do GAN and MoYu use the
+ * same AES-128 CBC scheme (different root keys + IVs). Each vendor gets
  * its own [SmartCubeDriver] implementation. The
  * [com.zucham.qbsmarter.data.ble.ConnectionOrchestrator] picks one at
  * connect time by matching the cube's advertised BLE service UUIDs.
@@ -22,7 +25,8 @@ import com.zucham.qbsmarter.domain.driver.gan.GanGeneration
  * encryptor (if applicable), and the orchestrator's detection table.
  */
 enum class CubeVendor(val key: String) {
-    GAN("gan");
+    GAN("gan"),
+    MOYU("moyu");
 
     companion object {
         /** Parse the persisted [key] back into the enum; defaults to [GAN]
@@ -53,6 +57,9 @@ enum class CubeVendor(val key: String) {
             val normalized = advertisedServices.map { it.lowercase() }.toSet()
             if (GanGeneration.entries.any { it.serviceUuid.lowercase() in normalized }) {
                 return GAN
+            }
+            if (MoyuConstants.SERVICE_UUID.lowercase() in normalized) {
+                return MOYU
             }
             return null
         }

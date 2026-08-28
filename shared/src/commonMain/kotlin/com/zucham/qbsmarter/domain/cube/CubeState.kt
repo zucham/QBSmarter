@@ -152,3 +152,118 @@ fun CubeState.toKociembaFacelets(): String {
     }
     return f.concatToString()
 }
+
+/**
+ * Inverse of [toKociembaFacelets]. Parse a 54-char URFDLB-ordered
+ * sticker string back into a [CubeState]. Returns null when the input
+ * is malformed (wrong length; non-`URFDLB` character; sticker pattern
+ * not matching any valid corner/edge cubie permutation).
+ *
+ * Driven by the same [CORNER_FACELET_MAP] / [EDGE_FACELET_MAP] tables
+ * the forward direction uses. For each corner slot:
+ *   1. Read the three facelet colors at the slot's facelet indices.
+ *   2. Find the canonical corner cubie whose unordered colour triple
+ *      matches. That's [cp].
+ *   3. Determine orientation by which of the three stickers carries
+ *      the U/D colour. Position-of-UD = co (per the forward formula
+ *      `(p + co[i]) % 3` where p = 0 is the canonical UD facelet).
+ *
+ * Edges are analogous but simpler: each edge has a designated
+ * "primary" sticker (UD-colour for UD-layer edges, FB-colour for
+ * middle-layer edges – matching the standard Kociemba/F2L convention
+ * encoded in the EDGE_FACELET_MAP rows). Orientation is 0 if the
+ * cubie's primary sticker is at slot position 0, else 1.
+ *
+ * Centres at indices 4/13/22/31/40/49 are not read – they're implicit
+ * (they define the colour-to-face mapping). The caller is expected to
+ * supply a string where centres already match URFDLB; the MoYu
+ * decoder constructs the string with that invariant in mind.
+ *
+ * **Cost.** O(54) parsing, no allocations beyond the result. Called
+ * once per Facelets event (a handful of times per minute on a normal
+ * connection), so performance isn't a concern.
+ *
+ * Used by the MoYu V10 driver to convert the cube's
+ * `FBUDLR`-ordered sticker-colour facelets event into our internal
+ * [CubeState]. GAN cubes report state already in CP/CO/EP/EO form and
+ * never call this.
+ */
+fun CubeState.Companion.fromKociembaFacelets(facelets: String): CubeState? {
+    if (facelets.length != 54) return null
+    val faces = "URFDLB"
+    // Quick character whitelist – any unknown char is an outright reject.
+    if (facelets.any { it !in faces }) return null
+
+    fun faceOf(idx: Int): Char = facelets[idx]
+
+    // -- Corners --
+    val cp = IntArray(N_CORNERS)
+    val co = IntArray(N_CORNERS)
+    for (slot in 0 until N_CORNERS) {
+        val pos = CORNER_FACELET_MAP[slot]
+        // Three colours at the slot's three facelet positions, in canonical
+        // order (p=0 is the slot's UD facelet, p=1 / p=2 are the side
+        // facelets in canonical rotation).
+        val c0 = faceOf(pos[0])
+        val c1 = faceOf(pos[1])
+        val c2 = faceOf(pos[2])
+        // Twist = which p has the U or D colour. Per the forward formula
+        // `(p + co[i]) % 3 = 0` solves to p = (3 - co[i]) % 3, so the
+        // location of the UD sticker tells us co directly: co = location.
+        val twist = when {
+            c0 == 'U' || c0 == 'D' -> 0
+            c1 == 'U' || c1 == 'D' -> 1
+            c2 == 'U' || c2 == 'D' -> 2
+            else -> return null  // No UD sticker → corner is impossible.
+        }
+        co[slot] = twist
+        // Read the cubie's three colours in CANONICAL (untwisted) order so
+        // we can match against the catalogue: rotate (c0, c1, c2) by -twist.
+        val canonical = when (twist) {
+            0 -> Triple(c0, c1, c2)
+            1 -> Triple(c1, c2, c0)
+            2 -> Triple(c2, c0, c1)
+            else -> error("unreachable")
+        }
+        // Find cubie j whose canonical colour triple matches.
+        var found = -1
+        for (j in 0 until N_CORNERS) {
+            val jc0 = faces[CORNER_FACELET_MAP[j][0] / 9]
+            val jc1 = faces[CORNER_FACELET_MAP[j][1] / 9]
+            val jc2 = faces[CORNER_FACELET_MAP[j][2] / 9]
+            if (jc0 == canonical.first && jc1 == canonical.second && jc2 == canonical.third) {
+                found = j
+                break
+            }
+        }
+        if (found < 0) return null
+        cp[slot] = found
+    }
+    // Permutation must be a bijection of 0..7.
+    if (cp.toSet().size != N_CORNERS) return null
+
+    // -- Edges --
+    val ep = IntArray(N_EDGES)
+    val eo = IntArray(N_EDGES)
+    for (slot in 0 until N_EDGES) {
+        val pos = EDGE_FACELET_MAP[slot]
+        val c0 = faceOf(pos[0])
+        val c1 = faceOf(pos[1])
+        // Find cubie j whose canonical colour pair matches (unordered).
+        // Canonical primary colour = colour at p=0 of cubie j's slot.
+        var found = -1
+        var flip = 0
+        for (j in 0 until N_EDGES) {
+            val jc0 = faces[EDGE_FACELET_MAP[j][0] / 9]
+            val jc1 = faces[EDGE_FACELET_MAP[j][1] / 9]
+            if (jc0 == c0 && jc1 == c1) { found = j; flip = 0; break }
+            if (jc0 == c1 && jc1 == c0) { found = j; flip = 1; break }
+        }
+        if (found < 0) return null
+        ep[slot] = found
+        eo[slot] = flip
+    }
+    if (ep.toSet().size != N_EDGES) return null
+
+    return CubeState(cp = cp, co = co, ep = ep, eo = eo)
+}

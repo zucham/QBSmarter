@@ -15,6 +15,7 @@ import com.zucham.qbsmarter.domain.cube.RubiksCube
 import com.zucham.qbsmarter.domain.driver.CubeDriverFacade
 import com.zucham.qbsmarter.domain.driver.SmartCubeDriver
 import com.zucham.qbsmarter.domain.driver.gan.GanCubeDriver
+import com.zucham.qbsmarter.domain.driver.moyu.MoyuCubeDriver
 import com.zucham.qbsmarter.ui.i18n.LocaleController
 import com.zucham.qbsmarter.ui.screens.devices.DevicesViewModel
 import com.zucham.qbsmarter.ui.screens.history.HistoryViewModel
@@ -106,10 +107,13 @@ val sharedModule = module {
     //
     // [GanCubeDriver] holds Gen2/Gen3/Gen4 parsers internally and
     // selects one based on the [com.zucham.qbsmarter.domain.driver.gan.GanGeneration]
-    // argument the orchestrator passes at connect time. A second vendor
-    // would join here as its own singleton.
+    // argument the orchestrator passes at connect time. The MoYu driver
+    // is single-generation (V10 AI today; further models would either
+    // join here or follow the GAN pattern with internal parser
+    // selection).
     single { RubiksCube() }
     single { GanCubeDriver(parserDispatcher = Dispatchers.Default) }
+    single { MoyuCubeDriver(parserDispatcher = Dispatchers.Default) }
     single { CubeDriverFacade(scope = get()) }
     single<SmartCubeDriver> { get<CubeDriverFacade>() }
 
@@ -121,6 +125,7 @@ val sharedModule = module {
         ConnectionOrchestrator(
             ble = get(),
             ganDriver = get(),
+            moyuDriver = get(),
             facade = get(),
             devicesRepo = get(),
             scope = get(),

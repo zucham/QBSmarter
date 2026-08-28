@@ -10,6 +10,10 @@ import com.zucham.qbsmarter.domain.driver.gan.GanCubeDriver
 import com.zucham.qbsmarter.domain.driver.gan.GanEncryptor
 import com.zucham.qbsmarter.domain.driver.gan.GanGeneration
 import com.zucham.qbsmarter.domain.driver.gan.ganSaltFromMac
+import com.zucham.qbsmarter.domain.driver.moyu.MoyuConstants
+import com.zucham.qbsmarter.domain.driver.moyu.MoyuCubeDriver
+import com.zucham.qbsmarter.domain.driver.moyu.MoyuEncryptor
+import com.zucham.qbsmarter.domain.driver.moyu.moyuSaltFromMac
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -39,20 +43,21 @@ import kotlinx.coroutines.withTimeoutOrNull
  * Both have to live longer than any VM, so they share the same scope
  * (the app-wide singleton scope from Koin).
  *
- * **Vendor branching.** The orchestrator no longer talks to a concrete
- * driver. It picks one at connect time by matching the cube's advertised
- * BLE service UUIDs via [CubeVendor.detect], records the choice on the
- * [cubes] DB row (via [DevicesRepository.updateVendor]), and binds it on
- * the [CubeDriverFacade], which re-publishes the active driver's events
+ * **Vendor branching.** Two cube vendors are supported today, each with
+ * its own driver implementation: [GanCubeDriver] (covering GAN's three
+ * protocol generations Gen2/3/4 internally) and [MoyuCubeDriver]
+ * (covering the MoYu WeiLong V10 AI). The orchestrator picks one at
+ * connect time by matching the cube's advertised BLE service UUIDs via
+ * [CubeVendor.detect]. The choice is recorded both in the [cubes] DB
+ * row (via [DevicesRepository.updateVendor]) and, more importantly, on
+ * the [CubeDriverFacade] which re-publishes the active driver's events
  * on a single stable [SmartCubeEvent] flow that the rest of the app
- * subscribes to without knowing which vendor is in use. Today
- * [GanCubeDriver] is the only implementation (covering GAN's three
- * protocol generations Gen2/3/4 internally), but nothing above the
- * facade has to change when a second one arrives.
+ * subscribes to without knowing which vendor is in use.
  */
 class ConnectionOrchestrator(
     private val ble: BleManager,
     private val ganDriver: GanCubeDriver,
+    private val moyuDriver: MoyuCubeDriver,
     private val facade: CubeDriverFacade,
     private val devicesRepo: DevicesRepository,
     private val scope: CoroutineScope,
@@ -190,11 +195,13 @@ class ConnectionOrchestrator(
                     }
                     is SmartCubeEvent.MovesMissed -> {
                         // The parser saw a serial-number jump bigger than
-                        // the cube's 7-move replay buffer, which means
-                        // some moves were lost forever. The only way to
-                        // recover the true state is a fresh Facelets
-                        // snapshot. Debounced so a noisy BLE link doesn't
-                        // generate a flood of GATT writes.
+                        // the cube's on-board replay buffer (7 moves for
+                        // GAN Gen2, 5 for MoYu V10, FIFO-managed for GAN
+                        // Gen3/4), which means some moves were lost
+                        // forever. The only way to recover the true
+                        // state is a fresh Facelets snapshot. Debounced
+                        // so a noisy BLE link doesn't generate a flood
+                        // of GATT writes.
                         val now = event.deviceTimestamp
                         if (now - lastResyncRequestMs >= RESYNC_DEBOUNCE_MS) {
                             lastResyncRequestMs = now
@@ -274,19 +281,22 @@ class ConnectionOrchestrator(
             // flips state to CONNECTING. The flow drives a per-row
             // spinner.
             _activeMac.value = device.address
-
             // New cube on the wire: it has to establish its hardware
             // info and earn its gyro flag on its own evidence, not
             // inherit the previous cube's.
             hardwareReceived = false
             gyroObserved = false
 
-            // Tear down the previously-active driver and unbind the
-            // facade. `disconnect()` is a cheap no-op when there is
-            // nothing live (transport/encryptor refs are already null,
-            // the ingest job already cancelled), so this is safe to run
-            // unconditionally before the vendor for THIS cube is known.
+            // Tear down both vendor drivers defensively. Only the
+            // previously-active one will have any live state to clear,
+            // but the others' `disconnect()` is a cheap no-op (sets
+            // their internal transport/encryptor refs to null and
+            // cancels an already-cancelled or never-started ingest
+            // job). Doing both keeps the code branch-free at this
+            // point – the vendor choice for THIS cube isn't known yet,
+            // and the previous cube might have been the other vendor.
             ganDriver.disconnect()
+            moyuDriver.disconnect()
             facade.clearActiveDriver()
             ble.connectToDevice(device)
 
@@ -297,11 +307,14 @@ class ConnectionOrchestrator(
             //   2. **Detect the cube's vendor** by matching the
             //      advertised service UUIDs against the known vendors
             //      via [CubeVendor.detect]. This decides which driver
-            //      to dispatch to.
+            //      (GAN or MoYu) to dispatch to.
             //   3. Build the vendor-appropriate encryptor and transport.
-            //      [GanEncryptor] is a thin factory over the shared
-            //      [AesCbcMacSaltEncryptor]; transport UUIDs come from
-            //      the matching constants ([GanGeneration] for GAN).
+            //      GAN and MoYu both use AES-128 CBC with a MAC-derived
+            //      salt, but they have *different* root key/IV pairs;
+            //      [GanEncryptor] and [MoyuEncryptor] are thin factories
+            //      over the shared [AesCbcMacSaltEncryptor]. Transport
+            //      UUIDs come from the matching constants ([GanGeneration]
+            //      for GAN, [MoyuConstants] for MoYu).
             //   4. Connect the matching driver, bind it on the facade
             //      so subscribers (including this orchestrator's init
             //      block) see its events. For GAN, this also passes the
@@ -352,6 +365,17 @@ class ConnectionOrchestrator(
                     facade.bindActiveDriver(ganDriver)
                     ganDriver.connect(transport, encryptor, generation)
                 }
+                CubeVendor.MOYU -> {
+                    val encryptor = MoyuEncryptor(moyuSaltFromMac(device.address))
+                    val transport = BleCubeTransport(
+                        ble = ble,
+                        serviceUuid = MoyuConstants.SERVICE_UUID,
+                        commandCharUuid = MoyuConstants.WRITE_CHAR_UUID,
+                        stateCharUuid = MoyuConstants.NOTIFY_CHAR_UUID,
+                    )
+                    facade.bindActiveDriver(moyuDriver)
+                    moyuDriver.connect(transport, encryptor)
+                }
             }
 
             val ready = withTimeoutOrNull(NOTIFICATIONS_READY_TIMEOUT_MS) {
@@ -378,6 +402,16 @@ class ConnectionOrchestrator(
             runCatching { facade.send(SmartCubeCommand.RequestFacelets) }
             delay(POST_CONNECT_GAP_MS)
             runCatching { facade.send(SmartCubeCommand.RequestBattery) }
+            // MoYu V10 specifically: ensure gyro is in the known-on
+            // state regardless of whatever the previous client session
+            // (likely the official WCU app) left it in. The cube
+            // remembers the setting across reconnects, so this is the
+            // only point we can reliably re-assert it. The ack is a
+            // 0xAC reply which the driver swallows.
+            if (detectedVendor == CubeVendor.MOYU) {
+                delay(POST_CONNECT_GAP_MS)
+                runCatching { moyuDriver.enableGyro() }
+            }
 
             ensureHardwareInfo()
         }
@@ -452,10 +486,15 @@ class ConnectionOrchestrator(
         scope.launch {
             connectJob?.cancel()
             connectJob = null
-            // Best-effort driver-level cleanup. If `disconnect()` itself
-            // throws (shouldn't, but defensive), we still proceed to
-            // tear down the BLE side.
+            // Best-effort driver-level cleanup for both vendors. Only one
+            // is realistically active at a time, but both `disconnect()`
+            // implementations are idempotent and cheap when there's
+            // nothing live (transport/encryptor refs are already null,
+            // ingest job is already cancelled). Clearing the facade
+            // ensures any subsequent `send` before the next connect
+            // becomes a no-op rather than reaching a torn-down driver.
             runCatching { ganDriver.disconnect() }
+            runCatching { moyuDriver.disconnect() }
             facade.clearActiveDriver()
             ble.disconnect()
             // Await the BLE stack acknowledging the disconnect. The

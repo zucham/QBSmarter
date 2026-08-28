@@ -38,7 +38,7 @@ This document captures everything a developer should know to work on QBSmarter p
 
 ## What QBSmarter is
 
-QBSmarter is an **Android-first Compose Multiplatform** companion app for **GAN** smart cubes. It connects via **Bluetooth Low Energy (BLE)** using the **GAN Gen2** &ndash; **Gen4** protocols, renders the cube in 3D with the **korender** engine, and provides:
+QBSmarter is an **Android-first Compose Multiplatform** companion app for **smart cubes**. It connects via **Bluetooth Low Energy (BLE)** using the **GAN Gen2** &ndash; **Gen4** protocols (GAN i Carry, i Carry 2, GAN12 ui Maglev, etc.) and the **MoYu WeiLong V10 AI** protocol, renders the cube in 3D with the **korender** engine, and provides:
 
 - a **Solve** screen (live cube view, scramble generator, scramble progress with deviation correction, inspection countdown, timer, post-solve penalty/DNF, stat tiles, personal-best celebration),
 - a **Devices** screen (scan, pair, reconnect, forget, per-cube battery, cube info dialog),
@@ -321,17 +321,33 @@ The reason all of this lives in a long-lived singleton (not a VM) is so navigati
 
 ### Smart-cube driver layer
 
-**Files:** `domain/driver/{CubeTransport, CubeEncryptor, SmartCubeCommand, SmartCubeEvent, SmartCubeDriver}.kt`, `domain/driver/gan/{GanCubeDriver, GanGeneration, GanParser, GanGen2Parser, GanGen3Parser, GanGen4Parser, BitView, GanEncryptor}.kt`.
+**Files:** `domain/driver/{CubeTransport, CubeEncryptor, CubeVendor, AesCbcMacSaltEncryptor, SmartCubeCommand, SmartCubeEvent, SmartCubeDriver, CubeDriverFacade, BitView}.kt`, `domain/driver/gan/{GanCubeDriver, GanGeneration, GanParser, GanGen2Parser, GanGen3Parser, GanGen4Parser, GanEncryptor}.kt`, `domain/driver/moyu/{MoyuCubeDriver, MoyuConstants, MoyuEncryptor, MoyuFaceletDecoder}.kt`.
 
-The driver layer is **generation-agnostic at the SmartCubeDriver interface** and **generation-aware inside the GAN driver**. `SmartCubeDriver` is an interface; any future *cube vendor* (MoYu, QiYi…) would get its own implementation. Today only the GAN family is implemented, via `GanCubeDriver`, which itself supports three protocol generations (Gen2, Gen3, Gen4) covering the full GAN smart-cube lineup as of writing.
+The driver layer is **vendor-agnostic at the SmartCubeDriver interface** and **vendor-aware inside each per-vendor driver**. `SmartCubeDriver` is an interface; each cube vendor gets its own implementation. Today two vendors are supported:
+
+- **GAN** via `GanCubeDriver`, which internally supports three protocol generations (Gen2, Gen3, Gen4) covering the full GAN smart-cube lineup. Inside the GAN driver, `GanGeneration.detect(advertisedServices)` picks the matching pre-allocated parser.
+- **MoYu** via `MoyuCubeDriver`, single-generation today (V10 AI).
+
+The `ConnectionOrchestrator` picks which vendor's driver to dispatch to via `CubeVendor.detect(advertisedServices)` – a two-step lookup that returns `GAN` if any of the three GAN service UUIDs match, `MOYU` if the V10 service UUID matches, else null. For GAN matches, the orchestrator then calls `GanGeneration.detect` to pick the generation. For MoYu, there's nothing further to pick today.
 
 ```
-┌──────────────────┐   raw bytes   ┌──────────────────────┐
-│ CubeTransport    │──────────────→│ GanCubeDriver        │
-│ (BLE adapter)    │←──────────────│  active GanParser    │
+┌──────────────────┐   raw bytes   ┌─────────────────────┐
+│ CubeTransport    │──────────────→│ GanCubeDriver       │
+│ (BLE adapter)    │←──────────────│  active GanParser   │
 └──────────────────┘   commands    │  (Gen2 / Gen3 / Gen4)│
-                                   └──────────────────────┘
-                                          │
+                                   └─────────────────────┘
+                ─── or ───
+┌──────────────────┐   raw bytes   ┌─────────────────────┐
+│ CubeTransport    │──────────────→│ MoyuCubeDriver      │
+│ (BLE adapter)    │←──────────────│  MoyuV10 parser     │
+└──────────────────┘   commands    └─────────────────────┘
+
+  GanCubeDriver.events ─┐
+                        ├──→ CubeDriverFacade.events ─→ subscribers
+  MoyuCubeDriver.events ─┘   (single stable SharedFlow that the rest
+                              of the app binds against as
+                              `SmartCubeDriver.events`)
+
                                           ▼
                                  ┌────────────────────┐
                                  │ SmartCubeEvent     │
@@ -342,18 +358,26 @@ The driver layer is **generation-agnostic at the SmartCubeDriver interface** and
                                  └────────────────────┘
 ```
 
-**Generation auto-detection.** The `ConnectionOrchestrator` waits for BLE service discovery, then calls `GanGeneration.detect(advertisedServices)` – a case-insensitive lookup against the three known service UUIDs. The matched generation is passed to `GanCubeDriver.connect(transport, encryptor, generation)`, which selects the corresponding pre-allocated parser. The encryptor is the same `GanEncryptor` for all three generations: per the upstream gan-web-bluetooth reference, all GAN cubes since Gen2 share a static AES-128 CBC key + IV, and per-cube salt derivation from the MAC is identical across generations.
+**Why a facade.** The rest of the app (`SolveViewModel`, `AppLifecycle`) binds against `SmartCubeDriver` once. Without a facade, swapping in a different vendor driver per cube would force every subscriber to re-bind. `CubeDriverFacade` is a `SmartCubeDriver` that holds a reference to whichever real driver the orchestrator has currently activated (`bindActiveDriver(driver)`) and re-publishes that driver's events on its own stable `SharedFlow`. Cube swaps – even cross-vendor swaps – never break the subscription model. The orchestrator's own event-handler `init` block also subscribes to `facade.events` for the same reason.
 
-**Per-generation parsers.** All three implement the small `GanParser` interface (`reset()`, `buildCommand(cmd)`, `suspend parseStatePacket(bytes, historyRequester)`). They diverge in:
+**Generation auto-detection (GAN).** Once `CubeVendor.detect` returns GAN, the orchestrator calls `GanGeneration.detect(advertisedServices)` to pick Gen2/Gen3/Gen4. The matched generation is passed to `GanCubeDriver.connect(transport, encryptor, generation)`, which selects the corresponding pre-allocated parser.
+
+**Encryption.** GAN and MoYu both use AES-128 CBC with a static root key + IV mixed with a 6-byte per-cube salt derived from the BLE MAC (reversed bytes). Only the root key and IV differ between vendors; the salt-mix algorithm and the two-block encryption-for-payloads-larger-than-16-bytes scheme are identical. The shared expect/actual `AesCbcMacSaltEncryptor(rootKey, rootIv, salt)` carries the actual AES code; `GanEncryptor` and `MoyuEncryptor` are thin wrappers that bake in the vendor-specific constants. (The `% 0xFF` salt-mix modulus instead of `% 0x100` is a quirk of the original GAN protocol that MoYu inherited verbatim.)
+
+**Per-generation parsers (GAN).** All three implement the small `GanParser` interface (`reset()`, `buildCommand(cmd)`, `suspend parseStatePacket(bytes, historyRequester)`). They diverge in:
 
 - **Packet format.** Gen2 is heavily bit-packed with BE words; Gen3 prefixes a `0x55` magic byte and uses byte-aligned fields with a mix of LE timestamps; Gen4 drops the magic byte but otherwise mirrors Gen3 with shifted offsets.
 - **Recovery model.** Gen2 has a 7-move on-cube replay buffer; if we lag further it surfaces `MovesMissed` and the orchestrator does a full `RequestFacelets` resync. Gen3/Gen4 add a targeted move-history retransmit (`SmartCubeCommand.RequestMoveHistory(serial, count)`); the parsers maintain a FIFO of pending moves and ask the cube to backfill gaps via the `historyRequester` callback. The orchestrator's MovesMissed → Facelets path is still the bail-out for FIFO overflow.
 - **Hardware reporting.** Gen4 spreads the hardware-info reply across four separate events (`0xFA`/`0xFC`/`0xFD`/`0xFE`); the parser accumulates fragments and emits a single unified `Hardware` event once all four arrive.
 - **Gyro support.** Gen2 always reports gyro; Gen3 never does (i Carry 2 hardware lacks the sensor); Gen4 reports it only on specific hardware names (currently `GAN12uiM`, the GAN12 ui Maglev).
 
-**Why per-connect encryptor:** GAN cubes derive their AES salt from the BLE MAC. Each cube gets its own `GanEncryptor` instance built from that cube's MAC, but the `GanCubeDriver` itself is a Koin singleton bound twice: as `GanCubeDriver` (so the orchestrator can call the generation-aware overload) and as `SmartCubeDriver` (so VMs and `AppLifecycle` see the generic interface). Subscribers to `driver.events` therefore stay stable across cube swaps **and across generation swaps** – they automatically see events from whichever cube is currently bound.
+**MoYu V10 protocol.** 20-byte AES-CBC-encrypted packets, message type in byte 0. Distinct events: `0xA1` Cube Info (model name + HW/SW versions + gyro flags + serial), `0xA3` Cube Status / Facelets (48 sticker colours × 3 bits in FBUDLR order + serial), `0xA4` Cube Power (battery 0..100), `0xA5` Cube Move (5 most-recent moves with per-move u16 elapsed-ms + serial; each move is a 5-bit code in 0..11 directly encoding face+direction), `0xAB` Gyro (4× LE s32 quaternion over `2^30`, in component order `(w, x, -z, y)`). `0xAC` is a special command to enable/disable gyro; sent on connect to ensure the cube is in a known-on state regardless of what the previous client session left it in.
 
-**Driver scope:** the driver owns its own `CoroutineScope(SupervisorJob() + parserDispatcher)` (default `Dispatchers.Default`), so decryption and parsing never run on the BLE binder thread. The events `SharedFlow` has `replay = 0`, `extraBufferCapacity = 64` – generous enough that a paused subscriber (user navigated away momentarily) doesn't drop moves.
+The Facelets event delivers sticker colors rather than CP/CO/EP/EO arrays – `MoyuFaceletDecoder` re-orders to URFDLB and re-maps colors to face letters, then hands off to `CubeState.fromKociembaFacelets(...)` which walks the corner and edge facelet maps to recover CP/CO/EP/EO. The recovery model mirrors GAN Gen2's: 5-move on-cube buffer (shorter than Gen2's 7), no targeted retransmit, MovesMissed → Facelets resync fallback driven by the orchestrator.
+
+**Why per-connect encryptor:** both GAN and MoYu cubes derive their AES salt from the BLE MAC. Each cube gets its own encryptor instance built from that cube's MAC at connect time. The drivers themselves are Koin singletons; the encryptor is passed into `connect()` and discarded after `disconnect()`. Subscribers to `facade.events` therefore stay stable across cube swaps, generation swaps, and even vendor swaps – they automatically see events from whichever cube is currently bound.
+
+**Driver scope:** each driver owns its own `CoroutineScope(SupervisorJob() + parserDispatcher)` (default `Dispatchers.Default`), so decryption and parsing never run on the BLE binder thread. The events `SharedFlow` has `replay = 0`, `extraBufferCapacity = 64` – generous enough that a paused subscriber (user navigated away momentarily) doesn't drop moves. The facade has its own `MutableSharedFlow` with the same buffer settings so the merged stream gets equivalent jitter tolerance.
 
 ---
 
@@ -1099,6 +1123,72 @@ The parser asks for backfill via a `historyRequester: suspend (startSerial, coun
 
 ---
 
+## MoYu WeiLong V10 AI protocol notes
+
+Reverse-engineered protocol details for the MoYu V10 AI smart cube. Source: the [WeiLong V10 AI protocol writeup](https://github.com/lukeburong/weilong-v10-ai-protocol) by `lukeburong`.
+
+### Service / characteristic UUIDs
+
+```
+MoYu V10 AI (device name prefix WCU_MY)
+  service: 0783b03e-7735-b5a0-1760-a305d2795cb0
+  notify:  0783b03e-7735-b5a0-1760-a305d2795cb1
+  write:   0783b03e-7735-b5a0-1760-a305d2795cb2
+```
+
+The cube also advertises an OTA firmware-update service at `02f00000-…-fe00` (`READ`/`WRITE`/`NOTIFY` on `…ff00-ff03`). This isn't used by QBSmarter – firmware update is the official WCU app's domain.
+
+### Encryption
+
+AES-128 CBC, no padding. Same scheme as GAN Gen2+ (key + IV mixed with reversed-MAC salt, `% 0xFF` modulus, two-block tail-encryption for payloads > 16 bytes), with a *different* root key + IV. Implementation lives in the shared `AesCbcMacSaltEncryptor`; `MoyuEncryptor` is a thin factory that supplies the MoYu constants:
+
+```
+Root key: 15773A5C670E2D1F17672A139B675257
+Root IV:  11232625862A2C3B55067F317E672157
+```
+
+### Packet format (decrypted)
+
+20-byte packets, message type at byte 0. Distinct events:
+
+| Hex | Meaning |
+|---|---|
+| `0xA1` | Cube Info (8-byte model name, HW/SW versions, gyro flags, move counter) |
+| `0xA3` | Cube Status / Facelets (48 stickers × 3 bits in FBUDLR face order + serial) |
+| `0xA4` | Cube Power (battery 0..100) |
+| `0xA5` | Cube Move (5 most-recent moves + 5 × u16 per-move ms + serial) |
+| `0xAB` | Gyroscope (4 × LE s32 quaternion over `2^30`, component order `(w, x, -z, y)`) |
+| `0xAC` | Gyro enable/disable command + ack |
+
+Commands use the same opcode bytes as the corresponding events (e.g. `0xA1` requests Cube Info; the cube replies with `0xA1`).
+
+**Init quirk.** Per the writeup: "Immediately after connecting to the cube, you need to write a Cube Info (0xA1) message to initialize correctly the cube." The orchestrator's `RequestHardware` post-connect command maps to 0xA1 on MoYu, so this just happens naturally as part of the existing handshake.
+
+**Facelets representation.** Unlike GAN, MoYu reports facelet state as sticker colors (3 bits each, 0=Green, 1=Blue, 2=White, 3=Yellow, 4=Orange, 5=Red) rather than CP/CO/EP/EO. The `MoyuFaceletDecoder` reorders the 48 stickers from FBUDLR to URFDLB, relabels colors to face letters (WCA orientation: green front, white top), and hands the resulting 54-char Kociemba string to `CubeState.fromKociembaFacelets(...)`. That helper does the corner/edge identification by walking the same `CORNER_FACELET_MAP`/`EDGE_FACELET_MAP` tables `toKociembaFacelets` uses in the forward direction.
+
+**Recovery model.** The 0xA5 packet always carries the 5 most-recent moves keyed by a rolling 8-bit serial counter. Same shape as GAN Gen2's 7-move buffer but two moves shorter. Parser logic mirrors Gen2: `rawDiff = (serial - lastSerial) & 0xFF`, `diff = min(rawDiff, 5)`, `missed = max(rawDiff - 5, 0)`. On `missed > 0` it surfaces `MovesMissed` and the orchestrator's debounced `RequestFacelets` resync recovers. No targeted move-history retransmit is documented in the protocol; `SmartCubeCommand.RequestMoveHistory` returns `null` from `buildCommand` for MoYu, same as for GAN Gen2.
+
+**Move encoding.** Five 5-bit codes packed back-to-back at bit offset 96. Each code directly encodes face + direction (no separate direction bit, unlike GAN's encodings):
+
+```
+0  → F     1  → F'
+2  → B     3  → B'
+4  → U     5  → U'
+6  → D     7  → D'
+8  → L     9  → L'
+10 → R     11 → R'
+```
+
+The moves are packed newest-first; the parser iterates `diff - 1 downTo 0` to emit them oldest-to-newest (causal order), matching the Gen2 emission loop and the order the rest of the app expects.
+
+**Gyro.** Cube ships with gyro on by default. We send `0xAC + 0x00 + 0x01` (enable) as the last post-connect command to ensure a known-on state regardless of whatever previous-client-session state the cube remembers. The cube replies with a `0xAC` ack which the driver swallows.
+
+The quaternion encoding has a known firmware quirk where the official implementation's signed-shift causes off-by-one sign extension; we follow the writeup's corrected interpretation: read each 4-byte chunk as a signed 32-bit LE int, divide by `2^30`, and apply the documented component order `(w, x, -z, y)`. Korender's `Quaternion(w, Vec3(x, y, z))` constructor then receives a properly negated z.
+
+**No reset opcode.** The protocol writeup documents no software-reset command. `SmartCubeCommand.RequestReset` returns `null` from MoYu's `buildCommand`; user-initiated "reset visual state" is purely app-side (reset internal `CubeState` to SOLVED + zero centres; nothing is written to the cube). The cube reports the physical state, so any real "fix mismatch" workflow is to physically solve the cube and let the resulting Facelets event drive the resync.
+
+---
+
 ## Database schema
 
 ```
@@ -1319,5 +1409,5 @@ The `@Composable expect fun ApplySystemBarsTheme` pattern works because Compose 
 - **`BleManager.android.kt` uses `android.util.Log` directly** while the rest of the app uses Kermit. This is platform-specific code tightly coupled to Android Bluetooth APIs, so it's defensible, but a unified Kermit-on-Android setup would be cleaner.
 - **No iOS support** – see *Module layout / Why no iosMain*. Blocked on korender adding an iOS variant or a renderer abstraction.
 - **JVM-desktop and Web targets are stubs**. The desktop entry point shows a placeholder window; web modules are excluded from `settings.gradle.kts`. Implementing them is feasible (see *Multiplatform stubs* for the steps).
-- **Crypto constants are hardcoded.** GAN Gen2 keys/IVs are static and well-known in the smart-cube community, so this is fine, but future GAN generations (Gen3, Gen4) will need new driver/encryptor implementations behind `SmartCubeDriver`.
+- **Crypto constants are hardcoded.** GAN Gen2/3/4 share the same key + IV; MoYu V10 uses its own key + IV. Both are static and well-known in the smart-cube community, so this is fine. Future vendors can plug in via a new `SmartCubeDriver` implementation + a thin wrapper around the shared `AesCbcMacSaltEncryptor` (or a fresh encryptor entirely, if a future vendor uses a different scheme).
 - **The "is GAN" detection on the Devices screen** uses a hardcoded MAC OUI prefix list (`GAN_CUBE_OUI_PREFIXES` in `DevicesScreen.kt`), currently containing a single entry (`"AB:12:34"`). New GAN models with different prefixes can be supported by adding them to that list.
