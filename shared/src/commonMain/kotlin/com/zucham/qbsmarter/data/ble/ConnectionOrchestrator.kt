@@ -87,6 +87,20 @@ class ConnectionOrchestrator(
      */
     private var lastResyncRequestMs: Long = 0L
 
+    /**
+     * Set once a [SmartCubeEvent.Hardware] has actually been received for
+     * the cube currently on the wire. Drives the retry in
+     * [ensureHardwareInfo]; cleared whenever [_activeMac] changes.
+     */
+    private var hardwareReceived: Boolean = false
+
+    /**
+     * Set once gyro data has actually been seen from the cube currently
+     * on the wire. Pure write-suppression — gyro streams continuously and
+     * the database only needs telling once.
+     */
+    private var gyroObserved: Boolean = false
+
     init {
         // Persist Hardware events to the DB; cache Battery in memory.
         // Both listeners live forever so they don't miss an event because
@@ -95,6 +109,8 @@ class ConnectionOrchestrator(
             .onEach { event ->
                 when (event) {
                     is SmartCubeEvent.Hardware -> _activeMac.value?.let { mac ->
+                        // Stops the retry in [ensureHardwareInfo].
+                        hardwareReceived = true
                         log.d {
                             "INFO ($mac): hw=${event.hwVersion} sw=${event.swVersion} gyro=${event.gyroSupported}"
                         }
@@ -104,6 +120,29 @@ class ConnectionOrchestrator(
                             swVersion = event.swVersion,
                             gyroSupported = event.gyroSupported,
                         )
+                    }
+                    // Receiving gyro data is proof the cube has a
+                    // gyroscope, and it outranks anything the hardware
+                    // handshake did or didn't manage to tell us. Gyro
+                    // notifications are unsolicited on cubes with the
+                    // sensor, so this lands within about a second of
+                    // connecting.
+                    //
+                    // It's the safety net under every failure mode of
+                    // declared capability: a GAN Gen4 hardware name
+                    // missing from the allow-list, a Gen2 capability bit
+                    // that reads 0 on a cube that plainly has the sensor,
+                    // or a hardware handshake that never completes at
+                    // all. Any of those used to leave the cube stuck at
+                    // "gyro: unknown" with the Gyro button hidden.
+                    is SmartCubeEvent.Gyro -> {
+                        if (!gyroObserved) {
+                            _activeMac.value?.let { mac ->
+                                gyroObserved = true
+                                log.d { "GYRO ($mac): sensor confirmed by observed gyro data" }
+                                devicesRepo.markGyroSupported(mac)
+                            }
+                        }
                     }
                     is SmartCubeEvent.Battery -> _activeMac.value?.let { mac ->
                         log.d { "BATTERY ($mac): ${event.level}%" }
@@ -196,6 +235,12 @@ class ConnectionOrchestrator(
             // spinner.
             _activeMac.value = device.address
 
+            // New cube on the wire: it has to establish its hardware
+            // info and earn its gyro flag on its own evidence, not
+            // inherit the previous cube's.
+            hardwareReceived = false
+            gyroObserved = false
+
             val encryptor = GanEncryptor(ganSaltFromMac(device.address))
             driver.disconnect()
             ble.connectToDevice(device)
@@ -258,11 +303,63 @@ class ConnectionOrchestrator(
             // Spaced commands so back-to-back GATT writes don't overflow
             // the queue on flaky stacks. Each is best-effort – failures
             // don't tear down the connection.
+            //
+            // A settling delay before the first write, and it is not
+            // ceremony. `notificationsReady` flips inside the CCCD
+            // descriptor-write callback, and on several Android stacks a
+            // characteristic write issued in the same breath as that
+            // callback is silently dropped — no error, no reply, the
+            // cube simply never hears it. Whichever command goes first
+            // absorbs that risk.
+            delay(FIRST_COMMAND_SETTLE_MS)
             runCatching { driver.send(SmartCubeCommand.RequestHardware) }
             delay(POST_CONNECT_GAP_MS)
             runCatching { driver.send(SmartCubeCommand.RequestFacelets) }
             delay(POST_CONNECT_GAP_MS)
             runCatching { driver.send(SmartCubeCommand.RequestBattery) }
+
+            ensureHardwareInfo()
+        }
+    }
+
+    /**
+     * Keep asking for hardware info until the cube actually answers.
+     *
+     * The hardware reply is the only source of the cube's declared
+     * gyro capability, and it is uniquely fragile: unlike facelets and
+     * battery — which the app re-requests naturally over the life of a
+     * session — it is asked for exactly once, and it is asked for
+     * *first*, right after the CCCD descriptor write, which is precisely
+     * where Android stacks are most likely to drop a characteristic
+     * write. Lose that single write and the cube reports "hardware:
+     * blank, gyro: unknown" for as long as it stays paired, because
+     * nothing ever asks again. Moves, facelets and battery all keep
+     * working, which makes it look like a UI bug rather than a lost
+     * packet.
+     *
+     * So: re-send on a fixed interval until a [SmartCubeEvent.Hardware]
+     * arrives (the event handler sets [hardwareReceived]), giving up
+     * after [HARDWARE_RETRY_ATTEMPTS]. Cheap — a couple of 20-byte
+     * writes on an idle link — and it converges on the first retry in
+     * the common case.
+     *
+     * Giving up is not a failure state: capability detection has a
+     * second, independent path (see the `Gyro` branch of the event
+     * handler), so a cube that never answers this handshake can still
+     * light up the Gyro button by simply sending gyro data.
+     */
+    private suspend fun ensureHardwareInfo() {
+        repeat(HARDWARE_RETRY_ATTEMPTS) { attempt ->
+            delay(HARDWARE_RETRY_INTERVAL_MS)
+            if (hardwareReceived || _activeMac.value == null) return
+            log.w { "No hardware info yet; re-requesting (attempt ${attempt + 2})" }
+            runCatching { driver.send(SmartCubeCommand.RequestHardware) }
+        }
+        if (!hardwareReceived) {
+            log.w {
+                "Cube never answered RequestHardware; hardware info and declared " +
+                    "gyro capability stay unknown for this session"
+            }
         }
     }
 
@@ -311,6 +408,8 @@ class ConnectionOrchestrator(
             }
             _activeMac.value?.let { _batteryByMac.value = _batteryByMac.value - it }
             _activeMac.value = null
+            hardwareReceived = false
+            gyroObserved = false
         }
     }
 
@@ -320,6 +419,29 @@ class ConnectionOrchestrator(
 
         const val POST_CONNECT_GAP_MS = 120L
         const val NOTIFICATIONS_READY_TIMEOUT_MS = 3000L
+
+        /**
+         * Pause between `notificationsReady` and the first command
+         * write. See the comment at the call site: a write issued in the
+         * same breath as the CCCD descriptor callback is silently
+         * dropped on some Android stacks.
+         */
+        const val FIRST_COMMAND_SETTLE_MS = 150L
+
+        /**
+         * How long to wait for a hardware reply before asking again.
+         * Comfortably longer than the ~150 ms a cube normally takes, so
+         * a healthy handshake never triggers a retry at all.
+         */
+        const val HARDWARE_RETRY_INTERVAL_MS = 700L
+
+        /**
+         * How many times to re-ask for hardware info. Three retries over
+         * ~2 s: enough to ride out a dropped write or a slow cube,
+         * short enough that a cube which genuinely doesn't implement the
+         * command stops being pestered quickly.
+         */
+        const val HARDWARE_RETRY_ATTEMPTS = 3
 
         /**
          * Upper bound on how long [connect] waits for an existing GATT

@@ -286,17 +286,34 @@ This is the most subtle piece of BLE plumbing in the app. The order is:
 6. **Wait for service discovery + detect the protocol generation.** Collect `ble.discoveredServices` until a snapshot contains a UUID matching one of `GanGeneration.{GEN2, GEN3, GEN4}.serviceUuid`. The detected generation determines both the BLE characteristic UUIDs the transport binds to AND which parser the driver activates.
 7. Build `BleCubeTransport(serviceUuid, commandCharUuid, stateCharUuid)` from the detected generation's fields, then call `driver.connect(transport, encryptor, generation)`. The driver activates the matching parser, calls `parser.reset()`, enables notifications, which kicks off the CCCD descriptor write.
 8. **Wait for `ble.notificationsReady` to flip true** (with a 3 s timeout fallback). Without this gate, the next 3 command writes race the descriptor write – the cube either drops them or replies into a void.
-9. Send `RequestHardware`, `RequestFacelets`, `RequestBattery` with **120 ms gaps** so back-to-back GATT writes don't overflow the queue on flaky stacks. Each is wrapped in `runCatching` – failures don't tear down the connection.
+9. Wait a further `FIRST_COMMAND_SETTLE_MS` (150 ms), then send `RequestHardware`, `RequestFacelets`, `RequestBattery` with **120 ms gaps** so back-to-back GATT writes don't overflow the queue on flaky stacks. Each is wrapped in `runCatching` – failures don't tear down the connection.
+10. Run `ensureHardwareInfo()` – see *Hardware handshake* below.
+
+##### Hardware handshake
+
+`notificationsReady` flipping true is necessary but not sufficient. It fires inside the CCCD descriptor-write callback, and on several Android stacks a characteristic write issued in that same breath is **silently dropped** — no error, no reply, the cube simply never hears it. Whichever command goes first absorbs that risk, and `RequestHardware` goes first.
+
+That made the hardware reply uniquely fragile. Facelets and battery are naturally re-requested over the life of a session (MovesMissed resync, user actions), so a lost one self-heals. Hardware was asked for exactly once, and it is the *only* source of the cube's declared gyro capability. Lose that single write and the cube reports blank hw/sw versions and "gyro: unknown" for as long as it stays paired — while moves, facelets and battery all keep working, which makes it look like a UI bug rather than a lost packet. This was observed in the field on a GAN12 ui.
+
+Two mitigations, both cheap:
+
+- `FIRST_COMMAND_SETTLE_MS` (150 ms) before the first write, so it isn't issued into the descriptor-callback window at all.
+- `ensureHardwareInfo()` re-sends `RequestHardware` every `HARDWARE_RETRY_INTERVAL_MS` (700 ms) until a `Hardware` event arrives, giving up after `HARDWARE_RETRY_ATTEMPTS` (3). The event handler sets `hardwareReceived`; the flag is cleared whenever `activeMac` changes. A healthy cube answers in ~150 ms and never triggers a retry.
+
+Giving up is not a failure state — capability detection has a second, independent path (see *Gyro capability detection*), so a cube that never answers this handshake can still light up the Gyro button by simply sending gyro data.
 
 **On cancel.** `disconnect()` is called via the user tapping Cancel mid-handshake or switching cubes. It cancels the connect job, calls `driver.disconnect()` and `ble.disconnect()`, then `withTimeout(2 s)` waits for `connectionState == DISCONNECTED` before clearing battery + active-MAC state. Without this final await, a subsequent action would race the in-flight teardown – exactly the family of bugs the close-ordering fix in `BleManager.disconnect` was meant to avoid.
 
 The orchestrator also listens to driver events forever and:
 
-- routes `SmartCubeEvent.Hardware` → `devicesRepo.updateHardwareInfo(...)`
+- routes `SmartCubeEvent.Hardware` → `devicesRepo.updateHardwareInfo(...)`, repeatedly — Gen4 reports in instalments and the retry above may land more than one — and sets `hardwareReceived` to stop the retry
+- routes the first `SmartCubeEvent.Gyro` of a connection → `devicesRepo.markGyroSupported(mac)`, latched by `gyroObserved` so a ~50 Hz sample stream doesn't become a ~50 Hz write loop
 - caches `SmartCubeEvent.Battery` per MAC into a `_batteryByMac` `StateFlow`
 - responds to `SmartCubeEvent.MovesMissed` with a debounced `RequestFacelets` (1500 ms minimum interval) – see *Move-history overflow* in the GAN section below. (For Gen3/Gen4, individual gaps are recovered transparently by the parser via the move-history backfill mechanism; MovesMissed only fires when the parser's FIFO overflows past 16 entries, i.e. backfill itself isn't keeping up.)
 
-`activeMac` is a `StateFlow<String?>` exposed publicly. The Devices screen combines it with `connectionState == CONNECTING` to derive `connectingMac`, which drives the per-row "Connecting…" spinner.
+`activeMac` is a `StateFlow<String?>` exposed publicly, and it is **the** answer to "which cube is on the wire". The Devices screen combines it with `connectionState == CONNECTING` to derive `connectingMac` (per-row "Connecting…" spinner) and with `CONNECTED` to derive `connectedCubeId` (green dot + accent border). The Solve screen resolves its `connectionSummary` cube the same way.
+
+Both screens used to guess instead — "whichever paired cube was seen most recently", on the theory that connecting refreshes `last_seen` and floats the right row to the head of the list. That guess fails whenever the ordering doesn't cooperate: the cube connects fine and no row lights up, or the wrong one does. It also mattered beyond cosmetics, because the resolved row is where `gyroSupported` is read from, and that gates the Gyro button.
 
 The reason all of this lives in a long-lived singleton (not a VM) is so navigation doesn't tear it down mid-handshake.
 

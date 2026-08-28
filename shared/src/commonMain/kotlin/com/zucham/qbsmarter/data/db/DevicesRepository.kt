@@ -69,14 +69,39 @@ class DevicesRepository(
         )
     }
 
-    /** Stamp HW/SW versions and gyro flag onto an already-paired cube. */
-    fun updateHardwareInfo(mac: String, hwVersion: String, swVersion: String, gyroSupported: Boolean) {
+    /**
+     * Stamp HW/SW versions and the gyro flag onto an already-paired cube.
+     *
+     * Safe to call repeatedly within one connection — GAN Gen4 reports
+     * its hardware in instalments and each one is persisted as it lands.
+     *
+     * A null [gyroSupported] means "not established yet" and leaves any
+     * previously-recorded value untouched (the query COALESCEs), so a
+     * later partial reply can't downgrade a known capability back to
+     * unknown.
+     */
+    fun updateHardwareInfo(
+        mac: String,
+        hwVersion: String,
+        swVersion: String,
+        gyroSupported: Boolean?,
+    ) {
         db.cubesQueries.updateHardwareInfo(
             hwVersion = hwVersion,
             swVersion = swVersion,
-            gyroSupported = if (gyroSupported) 1L else 0L,
+            gyroSupported = gyroSupported?.let { if (it) 1L else 0L },
             mac = mac,
         )
+    }
+
+    /**
+     * Record that a cube has a gyroscope on the strength of it having
+     * actually sent gyro data. See
+     * [com.zucham.qbsmarter.data.ble.ConnectionOrchestrator] for why this
+     * exists alongside the capability the cube declares.
+     */
+    fun markGyroSupported(mac: String) {
+        db.cubesQueries.markGyroSupported(mac)
     }
 
     fun forget(id: String) = db.cubesQueries.deleteById(id)

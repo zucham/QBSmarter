@@ -44,8 +44,24 @@ ON CONFLICT(mac) DO UPDATE SET
     user_id = excluded.user_id;
 
 updateHardwareInfo:
-UPDATE cubes SET hw_version = :hwVersion, sw_version = :swVersion, gyro_supported = :gyroSupported
+-- Every field is refine-only: a parameter meaning "not established yet"
+-- (NULL for the flag, empty string for a version) leaves whatever is
+-- already recorded alone. This query is called repeatedly within one
+-- connection — GAN Gen4 reports its hardware across four separate
+-- notifications, and the orchestrator re-requests until the cube answers
+-- — so straight assignment would let a partial reply blank out fields an
+-- earlier one had filled. The update must only ever go forwards.
+UPDATE cubes SET hw_version = COALESCE(NULLIF(:hwVersion, ''), hw_version),
+                 sw_version = COALESCE(NULLIF(:swVersion, ''), sw_version),
+                 gyro_supported = COALESCE(:gyroSupported, gyro_supported)
 WHERE mac = :mac;
+
+-- Record that a cube demonstrably has a gyroscope, because it just sent
+-- gyro data. Empirical evidence beats any declared capability: it cannot
+-- be wrong, it needs no hardware-name catalogue, and it still works when
+-- the hardware handshake never completes at all.
+markGyroSupported:
+UPDATE cubes SET gyro_supported = 1 WHERE mac = :mac;
 
 deleteById:
 DELETE FROM cubes WHERE id = :id;
