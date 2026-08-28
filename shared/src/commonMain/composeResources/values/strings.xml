@@ -77,6 +77,11 @@
     <string name="devices_bt_disabled">Bluetooth is turned off. Enable it to scan for cubes and pair them.</string>
     <string name="devices_bt_enable">Enable Bluetooth</string>
     <string name="devices_info">Info</string>
+    <string name="devices_edit">Edit</string>
+    <string name="devices_rename">Rename cube</string>
+    <string name="devices_rename_title">Rename cube</string>
+    <string name="devices_rename_hint">Leave blank to use the name the cube reports.</string>
+    <string name="devices_rename_save">Save</string>
     <string name="devices_detail_mac">MAC</string>
     <string name="devices_detail_hw">Hardware version</string>
     <string name="devices_detail_sw">Software version</string>

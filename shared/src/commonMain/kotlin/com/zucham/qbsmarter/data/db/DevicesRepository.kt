@@ -132,6 +132,24 @@ class DevicesRepository(
         db.cubesQueries.updateVendor(vendor = vendor.key, mac = mac)
     }
 
+    /**
+     * Give a paired cube a user-chosen display name.
+     *
+     * Trimmed, and a blank name is stored as NULL rather than as an
+     * empty string — the two would render identically (both fall back to
+     * "Unknown" in the list) but only NULL lets the cube's advertised
+     * name fill the row back in on the next connect. So "clear the
+     * field" reads as "go back to the default name", which is the only
+     * sensible meaning it can have.
+     *
+     * The name set here survives reconnects: the `upsert` query fills a
+     * row's name in only when it has none, so [rememberCube] can no
+     * longer stamp the manufacturer's advertised name back over it.
+     */
+    fun rename(id: String, name: String?) {
+        db.cubesQueries.renameById(name = name?.trim()?.takeIf { it.isNotEmpty() }, id = id)
+    }
+
     fun forget(id: String) = db.cubesQueries.deleteById(id)
 
     /** Snapshot all paired cubes for the user – used by export. */

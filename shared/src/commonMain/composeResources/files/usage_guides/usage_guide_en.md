@@ -125,7 +125,8 @@ The **My cubes** screen is used to manage all smart cubes you've paired with the
 For each paired cube you'll find these buttons:
 
 - **`Connect`** / **`Disconnect`** - connects or disconnects the cube. While connecting, a loading indicator is shown on the button. Only one cube can be connected at a time - a new connection automatically disconnects the previous one.
-- **`Info`** - opens a dialog with cube details: MAC address, hardware version, software version, gyro support, and current battery level.
+- **`Info`** - opens a dialog with cube details: MAC address, hardware version, software version, gyro support, and current battery level. The dialog also has an **`Edit`** button for renaming the cube.
+- **pencil icon** (next to the cube's name) - renames the cube. Leave the field blank and save to go back to the name the cube reports about itself.
 - **`Forget`** - removes the cube from the paired devices list. The cube can of course be re-paired in the future.
 
 At the top of the screen you'll find different context-dependent buttons depending on the current state:

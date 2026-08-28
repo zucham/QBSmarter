@@ -26,15 +26,20 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -45,6 +50,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.zucham.qbsmarter.data.ble.BleDevice
@@ -80,6 +86,7 @@ import qbsmarter.shared.generated.resources.devices_detail_hw
 import qbsmarter.shared.generated.resources.devices_detail_mac
 import qbsmarter.shared.generated.resources.devices_detail_sw
 import qbsmarter.shared.generated.resources.devices_disconnect
+import qbsmarter.shared.generated.resources.devices_edit
 import qbsmarter.shared.generated.resources.devices_forget
 import qbsmarter.shared.generated.resources.devices_forget_message
 import qbsmarter.shared.generated.resources.devices_forget_title
@@ -90,6 +97,10 @@ import qbsmarter.shared.generated.resources.devices_pair
 import qbsmarter.shared.generated.resources.devices_pair_new
 import qbsmarter.shared.generated.resources.devices_paired
 import qbsmarter.shared.generated.resources.devices_paired_empty
+import qbsmarter.shared.generated.resources.devices_rename
+import qbsmarter.shared.generated.resources.devices_rename_hint
+import qbsmarter.shared.generated.resources.devices_rename_save
+import qbsmarter.shared.generated.resources.devices_rename_title
 import qbsmarter.shared.generated.resources.devices_scanning
 import qbsmarter.shared.generated.resources.devices_unknown
 import qbsmarter.shared.generated.resources.history_close
@@ -122,6 +133,10 @@ fun DevicesScreen( onNavigateToSolve: () -> Unit = {}) {
 
     var pendingForget by remember { mutableStateOf<PairedCube?>(null) }
     var detail by remember { mutableStateOf<PairedCube?>(null) }
+    // The cube currently being renamed. One piece of state for both
+    // entry points (the pencil on the row and Edit in the info dialog)
+    // so there is exactly one rename dialog to reason about.
+    var pendingRename by remember { mutableStateOf<PairedCube?>(null) }
 
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
         // The header's Pair button renders a spinner when a connect is
@@ -217,12 +232,34 @@ fun DevicesScreen( onNavigateToSolve: () -> Unit = {}) {
                 onDisconnect = vm::disconnect,
                 onForget = { pendingForget = it },
                 onDetail = { detail = it },
+                onRename = { pendingRename = it },
             )
         }
     }
 
     detail?.let { cube ->
-        CubeDetailDialog(cube, batteryLevel = batteryByMac[cube.mac], onDismiss = { detail = null })
+        CubeDetailDialog(
+            cube = cube,
+            batteryLevel = batteryByMac[cube.mac],
+            onDismiss = { detail = null },
+            // Editing from the info dialog swaps one dialog for the
+            // other rather than stacking them: two modals deep over a
+            // list row is more chrome than the task deserves, and the
+            // info dialog's own title is the name being edited, so
+            // leaving it open behind would show a stale value.
+            onRename = { detail = null; pendingRename = cube },
+        )
+    }
+
+    pendingRename?.let { cube ->
+        RenameCubeDialog(
+            cube = cube,
+            onConfirm = { newName ->
+                vm.rename(cube, newName)
+                pendingRename = null
+            },
+            onDismiss = { pendingRename = null },
+        )
     }
 
     pendingForget?.let { cube ->
@@ -358,6 +395,7 @@ private fun PairedList(
     onDisconnect: () -> Unit,
     onForget: (PairedCube) -> Unit,
     onDetail: (PairedCube) -> Unit,
+    onRename: (PairedCube) -> Unit,
 ) {
     // True when ANY connect handshake is in flight. Used to disable
     // every Connect button (across all rows) so the user can't kick off
@@ -378,6 +416,7 @@ private fun PairedList(
                 onDisconnect = onDisconnect,
                 onForget = onForget,
                 onDetail = onDetail,
+                onRename = onRename,
             )
         }
     }
@@ -406,6 +445,7 @@ private fun PairedCubeRow(
     onDisconnect: () -> Unit,
     onForget: (PairedCube) -> Unit,
     onDetail: (PairedCube) -> Unit,
+    onRename: (PairedCube) -> Unit,
 ) {
     // Highlight the card with a thin colored border in BOTH the
     // connected and connecting states – visually it reads as "this row
@@ -443,11 +483,32 @@ private fun PairedCubeRow(
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
                 Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        cube.name ?: stringResource(Res.string.devices_unknown),
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.Bold,
-                    )
+                    // Name + inline rename affordance. The pencil sits
+                    // directly against the text (not out at the row's
+                    // edge) so it reads as "edit this name" rather than
+                    // as another card-level action alongside
+                    // Connect/Forget.
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            cube.name ?: stringResource(Res.string.devices_unknown),
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false),
+                        )
+                        IconButton(
+                            onClick = { onRename(cube) },
+                            modifier = Modifier.size(RenameIconButtonSize),
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Edit,
+                                contentDescription = stringResource(Res.string.devices_rename),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(RenameIconSize),
+                            )
+                        }
+                    }
                     Spacer(Modifier.height(8.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Box(
@@ -536,6 +597,17 @@ private fun PairedCubeRow(
     }
 }
 
+/**
+ * The pencil beside a cube's name. Deliberately smaller than the 48 dp
+ * Material minimum: it sits inline with the name text, and a full-size
+ * touch target would push the name's baseline around and dominate a row
+ * whose primary actions are Connect and Forget. The whole info dialog
+ * (one tap away, with a full-size Edit button) is the accessible route
+ * to the same action.
+ */
+private val RenameIconButtonSize = 32.dp
+private val RenameIconSize = 18.dp
+
 /** Compact text-button padding so the Info button doesn't dominate the row. */
 private val TightTextButtonPadding =
     androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 0.dp)
@@ -545,7 +617,12 @@ private val TightTextButtonPadding =
  * Surfaces everything we know from the GAN INFO handshake.
  */
 @Composable
-private fun CubeDetailDialog(cube: PairedCube, batteryLevel: Int?, onDismiss: () -> Unit) {
+private fun CubeDetailDialog(
+    cube: PairedCube,
+    batteryLevel: Int?,
+    onDismiss: () -> Unit,
+    onRename: () -> Unit,
+) {
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(cube.name ?: stringResource(Res.string.devices_unknown)) },
@@ -577,6 +654,70 @@ private fun CubeDetailDialog(cube: PairedCube, batteryLevel: Int?, onDismiss: ()
         confirmButton = {
             DialogButton(
                 label = stringResource(Res.string.history_close),
+                onClick = onDismiss,
+                emphasis = DialogButtonEmphasis.NEUTRAL,
+            )
+        },
+        // Edit sits in the dismiss slot so it lands on the left, away
+        // from the thumb's default target — Close is the common exit and
+        // keeps the right-hand position.
+        dismissButton = {
+            DialogButton(
+                label = stringResource(Res.string.devices_edit),
+                onClick = onRename,
+            )
+        },
+    )
+}
+
+/**
+ * Rename dialog for a paired cube. Reached from two places — the pencil
+ * beside the name in the paired list, and Edit in the cube info dialog —
+ * which is why it takes a plain [PairedCube] and a callback rather than
+ * knowing anything about either caller.
+ *
+ * The field starts pre-filled with the current name and selects nothing
+ * special; clearing it and confirming is a supported action meaning
+ * "drop my name for this cube and use the one it advertises", which is
+ * why there is no blank-name validation.
+ */
+@Composable
+private fun RenameCubeDialog(
+    cube: PairedCube,
+    onConfirm: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var name by remember(cube.id) { mutableStateOf(cube.name.orEmpty()) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(Res.string.devices_rename_title)) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    singleLine = true,
+                    placeholder = {
+                        Text(cube.name ?: stringResource(Res.string.devices_unknown))
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Text(
+                    stringResource(Res.string.devices_rename_hint),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        },
+        confirmButton = {
+            DialogButton(
+                label = stringResource(Res.string.devices_rename_save),
+                onClick = { onConfirm(name) },
+            )
+        },
+        dismissButton = {
+            DialogButton(
+                label = stringResource(Res.string.devices_cancel),
                 onClick = onDismiss,
                 emphasis = DialogButtonEmphasis.NEUTRAL,
             )

@@ -249,6 +249,19 @@ class DevicesViewModel(
         }
     }
 
+    /**
+     * Rename a paired cube. A blank name clears the user's override and
+     * lets the cube's own advertised name take over again — see
+     * [DevicesRepository.rename].
+     *
+     * No connection work involved: the name lives only in our database,
+     * so this is safe on a connected cube and takes effect immediately
+     * (the paired list observes the table).
+     */
+    fun rename(cube: PairedCube, name: String) {
+        devicesRepo.rename(cube.id, name)
+    }
+
     fun disconnect() = orchestrator.disconnect()
 
     /** Send the user to the OS Bluetooth settings panel. */

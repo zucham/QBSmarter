@@ -69,6 +69,11 @@
     <string name="devices_bt_disabled">Bluetooth je vypnutý. Zapněte ho pro vyhledávání a spárování kostek.</string>
     <string name="devices_bt_enable">Zapnout Bluetooth</string>
     <string name="devices_info">Info</string>
+    <string name="devices_edit">Upravit</string>
+    <string name="devices_rename">Přejmenovat kostku</string>
+    <string name="devices_rename_title">Přejmenovat kostku</string>
+    <string name="devices_rename_hint">Ponechte prázdné, chcete-li použít název hlášený kostkou.</string>
+    <string name="devices_rename_save">Uložit</string>
     <string name="devices_detail_mac">MAC</string>
     <string name="devices_detail_hw">Verze hardwaru</string>
     <string name="devices_detail_sw">Verze softwaru</string>

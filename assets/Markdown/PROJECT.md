@@ -836,7 +836,7 @@ Combined: `(phase != IDLE) && (display.keepScreenOn setting on)` → `screenKeep
 
 Two sections:
 
-- **Paired cubes** – every cube the user previously connected. Active row gets a 2 dp accent border, slightly higher elevation, a green indicator dot, a battery indicator next to the name (when known and connected), and a Disconnect button in place of Connect. Each card has Info + Forget buttons in a bottom row.
+- **Paired cubes** – every cube the user previously connected. Active row gets a 2 dp accent border, slightly higher elevation, a green indicator dot, a battery indicator next to the name (when known and connected), and a Disconnect button in place of Connect. Each card has Info + Forget buttons in a bottom row, and a small pencil inline with the cube's name.
 - **Available devices** (only while scanning) – fresh BLE results. GAN cubes (MAC prefix `AB:12:34`) are sorted to the top.
 
 ##### Available-devices palette
@@ -848,6 +848,14 @@ Three layers, deliberately stepped so the relationship reads as panel → tile �
 - **GAN tile** uses the seed's `primary` (with `onPrimary` text) – fully saturated so the cubes-the-user-actually-wants-to-connect-to draw the eye even when several non-GAN devices are listed. Earlier `primaryContainer` was a soft tint that didn't pull focus.
 
 The `VerticalScrollbarBox` in this section overrides the default thumb color with `onSurface @ alpha = 0.7` (vs. the default 0.5) because the thumb sits over the lighter panel rather than the page background, and the default tuned for the page background read as faint here.
+
+##### Renaming a cube
+
+Two entry points, one dialog. The pencil beside the name in the paired list and the **Edit** button in the cube info dialog both set the same `pendingRename` state, so there is a single `RenameCubeDialog` to reason about. Editing from the info dialog *replaces* it rather than stacking on top: two modals deep over a list row is more chrome than the task deserves, and the info dialog's title is the very name being edited, so leaving it behind would show a stale value.
+
+The pencil is deliberately below the 48 dp Material touch minimum (32 dp button, 18 dp glyph). It sits inline with the name, and a full-size target would push the name's baseline around and compete with Connect/Forget for the row's attention. The info dialog — one tap away, with a full-size Edit button — is the accessible route to the same action.
+
+Persistence is `DevicesRepository.rename(id, name)` → `cubes.renameById`. A blank name is stored as NULL, not `""`: the two render identically (both fall back to "Unknown") but only NULL lets the cube's advertised name fill the row back in on the next connect, so "clear the field" reads as "go back to the default name". This is the counterpart to the fill-only `name` clause in `cubes.upsert` — see *Database schema*. No BLE work is involved; the name lives only in our database, so renaming is safe on a connected cube and takes effect immediately because the paired list observes the table.
 
 ##### Per-row connect feedback
 
@@ -1276,6 +1284,7 @@ created_at                                           name                      s
 - `app_state` is a single-row pattern: PK is constant 0 (`CHECK (id = 0)`), so it can hold at most one row. `INSERT OR IGNORE` bootstraps; `UPDATE` mutates.
 - All three child tables (`cubes`, `solves`, `settings`) reference `users(id) ON DELETE CASCADE`. `app_state.active_user_id` is `ON DELETE SET NULL`.
 - `cubes.upsert` updates `user_id` on conflict – critical for multi-profile flows: a cube paired under profile A and re-paired under B must transfer ownership; otherwise `selectByUser(B)` won't return it and the cube is invisible in B's Paired list.
+- `cubes.upsert` sets `name = COALESCE(name, excluded.name)` — **fill-only**. The advertised BLE name is a fallback, not the truth: once a user renames a cube (`renameById`), a straight assignment would stamp the manufacturer's name back over it on the very next connect, so the rename would appear to survive only until reconnection. A NULL name is still fillable, so a cube first seen without one picks a name up later — which is why clearing the rename field means "go back to whatever the cube calls itself".
 - `cubes.vendor` is the persisted form of `CubeVendor` (`'gan'` / `'moyu'`), `NOT NULL DEFAULT 'gan'`. Stamped by the orchestrator via `updateVendor(mac, vendor)` right after service-UUID-based detection, well before the INFO round-trip lands. The `'gan'` default covers the brief pre-detection window for newly-paired rows and any pre-feature exports (which deserialise as `vendor = "gan"` by default).
 - `solves` indexes: `(user_id, solved_at DESC)` and `(user_id, duration_ms ASC)`. Both used by the History sort modes.
 - `solves.bestDuration` returns `MIN(duration_ms + penalty_ms)` skipping DNFs. Aliased `AS best` so the generated row class has a stable Kotlin property name.

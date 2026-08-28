@@ -35,13 +35,22 @@ SELECT * FROM cubes WHERE id = :id;
 selectByMac:
 SELECT * FROM cubes WHERE mac = :mac;
 
--- Upsert by MAC. On conflict we update name, last_seen, AND user_id.
+-- Upsert by MAC. On conflict we update last_seen AND user_id.
 -- The user_id update is critical for multi-profile flows: a cube that
 -- was previously paired under profile A and is now being paired under
 -- profile B must transfer ownership; otherwise selectByUser(B) won't
 -- return it and the cube is invisible in B's Paired list. (The id is
 -- preserved on conflict so any in-memory references to the row stay
 -- valid.)
+--
+-- name is fill-only: a row that already has one keeps it. The cube's
+-- advertised BLE name is a fallback, not the truth — once the user has
+-- renamed a cube (see [renameById]) every subsequent connect would
+-- otherwise stamp the manufacturer's name back over it, and the rename
+-- would appear to survive only until the next reconnect. A NULL name is
+-- still fillable, so a cube first seen without one picks a name up later.
+-- Clearing the name (renaming to blank) therefore means "go back to
+-- whatever the cube calls itself".
 --
 -- vendor is NOT touched on conflict: a re-pair of the same physical
 -- cube under a different profile keeps whatever vendor was previously
@@ -52,9 +61,15 @@ upsert:
 INSERT INTO cubes (id, mac, name, last_seen, user_id)
 VALUES (:id, :mac, :name, :lastSeen, :userId)
 ON CONFLICT(mac) DO UPDATE SET
-    name = excluded.name,
+    name = COALESCE(name, excluded.name),
     last_seen = excluded.last_seen,
     user_id = excluded.user_id;
+
+-- User-chosen display name for a paired cube. NULL means "no name of
+-- my own" — the row then takes the cube's advertised name again on the
+-- next connect, via the fill-only clause in [upsert].
+renameById:
+UPDATE cubes SET name = :name WHERE id = :id;
 
 updateHardwareInfo:
 -- Every field is refine-only: a parameter meaning "not established yet"
