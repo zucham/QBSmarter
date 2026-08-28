@@ -1,0 +1,166 @@
+-- Solve reconstruction data: the move stream and the gyroscope stream
+-- recorded during a solve, so the solve can later be replayed move by
+-- move with the cube rotating in the user's hands as it actually did.
+--
+-- ## Why these are side tables and not columns on `solves`
+--
+-- `pageByDateDesc` and friends are `SELECT *`, so every column on the
+-- `solves` row is read on every History page. A blob there would be
+-- dragged through the paging path (and into the generated `Solves` row
+-- class, and into every `SolveRow` the UI holds) purely to be ignored.
+-- One row per solve in a table nothing but the replay screen reads keeps
+-- the hot path exactly as wide as it was.
+--
+-- ## Why blobs and not a row per move / per sample
+--
+-- A row per move is roughly 40 bytes of SQLite overhead to carry 3 bytes
+-- of payload, and it multiplies the row count of the database by ~55.
+-- The blob encodings (see MoveTrackCodec / GyroTrackCodec) put a move in
+-- ~3 bytes and a gyro sample in ~5, which is what makes recording every
+-- solve affordable at all. Each blob carries its own `format` byte so a
+-- future encoding can be introduced without a migration: the decoder
+-- dispatches on it and old rows keep decoding under the old rules.
+--
+-- ## One timeline
+--
+-- Both streams are stored as milliseconds since the solve's first move,
+-- on the **cube clock**. That is not the clock the gyro arrives on:
+-- `SmartCubeEvent.Gyro` carries only a `deviceTimestamp` (wall clock at
+-- packet arrival, with the BLE stack's jitter in it), while the solve's
+-- duration is defined by `SolveTimer` from `Move.cubeTimestamp` deltas.
+-- Storing the two streams on their two different clocks would leave the
+-- replay to reconcile them, and they drift. Instead `SolveRecorder`
+-- buffers the samples in memory for the length of the solve and projects
+-- them onto the cube clock at `finish()`, using the `ClockSkewEstimator`
+-- the timer has been fitting all along. What lands here is already
+-- single-timeline.
+
+CREATE TABLE solve_moves (
+    solve_id INTEGER NOT NULL PRIMARY KEY REFERENCES solves(id) ON DELETE CASCADE,
+    format INTEGER NOT NULL,
+    move_count INTEGER NOT NULL,
+    payload BLOB NOT NULL
+);
+
+-- Gyro track. Carries `user_id` and `solved_at` denormalised from the
+-- parent solve, which is the one place in this schema a value is
+-- deliberately duplicated.
+--
+-- The reason is pruning. Every retention rule the app offers is phrased
+-- over gyro data specifically – "keep only the last N solves' rotation
+-- data", "delete everything older than this date", "keep this one
+-- forever" – and each is a DELETE scoped by profile and date. Without
+-- these two columns every such DELETE needs a join back to `solves`, and
+-- no index can serve it; with them, `solve_gyro_prune` answers all of
+-- them directly. The duplicated values are also immutable in practice
+-- (a solve's owner and its timestamp never change after insert), so
+-- there is no update path that could let the copy drift.
+--
+-- `pinned` is the "keep this one" flag: pruning never touches a pinned
+-- row. Set explicitly by the user, and automatically for a solve that
+-- holds a record — losing the rotation replay of your personal best to a
+-- background prune is exactly the data loss the flag exists to prevent.
+-- A pin only means something while the data is there, so it lives here
+-- rather than on `solves`: prune the row and the pin goes with it.
+CREATE TABLE solve_gyro (
+    solve_id INTEGER NOT NULL PRIMARY KEY REFERENCES solves(id) ON DELETE CASCADE,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    solved_at INTEGER NOT NULL,
+    format INTEGER NOT NULL,
+    sample_count INTEGER NOT NULL,
+    pinned INTEGER NOT NULL DEFAULT 0,
+    payload BLOB NOT NULL
+);
+
+-- Partial on `pinned = 0`: the only scans that use it are prunes, and a
+-- prune never considers a pinned row. Keeping pinned rows out of the
+-- index makes it smaller and means the retention sweep cannot even see
+-- the data it must not delete.
+CREATE INDEX solve_gyro_prune ON solve_gyro(user_id, solved_at) WHERE pinned = 0;
+
+-- -- Moves --------------------------------------------------------------
+
+putMoves:
+INSERT INTO solve_moves (solve_id, format, move_count, payload)
+VALUES (:solveId, :format, :moveCount, :payload)
+ON CONFLICT(solve_id) DO UPDATE SET
+    format = excluded.format,
+    move_count = excluded.move_count,
+    payload = excluded.payload;
+
+selectMoves:
+SELECT format, move_count, payload FROM solve_moves WHERE solve_id = :solveId;
+
+-- -- Gyro ---------------------------------------------------------------
+
+putGyro:
+INSERT INTO solve_gyro (solve_id, user_id, solved_at, format, sample_count, pinned, payload)
+VALUES (:solveId, :userId, :solvedAt, :format, :sampleCount, :pinned, :payload)
+ON CONFLICT(solve_id) DO UPDATE SET
+    format = excluded.format,
+    sample_count = excluded.sample_count,
+    payload = excluded.payload;
+-- `pinned` is NOT taken from the excluded row: re-recording a solve's
+-- gyro track must not silently clear a pin the user set on it.
+
+selectGyro:
+SELECT format, sample_count, pinned, payload FROM solve_gyro WHERE solve_id = :solveId;
+
+-- Whether a solve's rotation data exists and is pinned, without reading
+-- the blob. Drives the replay button's enabled state and the pin toggle.
+gyroStatus:
+SELECT sample_count, pinned FROM solve_gyro WHERE solve_id = :solveId;
+
+setGyroPinned:
+UPDATE solve_gyro SET pinned = :pinned WHERE solve_id = :solveId;
+
+-- Drop one solve's rotation data on request, pin or no pin. This is the
+-- user deleting their own data, not a retention sweep, so unlike every
+-- query under Retention below it ignores `pinned` – a pin protects
+-- against the app's housekeeping, never against the user.
+--
+-- There is deliberately no equivalent for the move track. A move track
+-- is what makes a solve replayable at all, it costs under 200 bytes, and
+-- it is deleted when the solve is (by cascade). "Delete the moves but
+-- keep the solve" is not a thing anyone wants.
+deleteGyro:
+DELETE FROM solve_gyro WHERE solve_id = :solveId;
+
+-- -- Retention ----------------------------------------------------------
+
+-- Total bytes of gyro data held for a profile. Shown next to the
+-- retention controls so "delete old rotation data" can say what it will
+-- reclaim before the user commits to it.
+gyroBytesForUser:
+SELECT SUM(LENGTH(payload)) AS bytes, COUNT(*) AS tracks
+FROM solve_gyro WHERE user_id = :userId;
+
+-- Rolling window: drop unpinned gyro tracks outside the newest :keep.
+--
+-- Phrased as "delete everything that is not in the newest :keep" rather
+-- than as a cutoff timestamp. A cutoff has to answer two awkward
+-- questions — whether the boundary row is inside or outside the window
+-- (an OFFSET is one row off from the count it reads like), and what
+-- happens when two solves share a `solved_at` to the millisecond and the
+-- comparison cannot separate them. The subquery answers both by
+-- construction: it names exactly :keep rows, ordered by a total order
+-- (`solved_at` alone is not one; the id breaks the ties), and everything
+-- else goes.
+--
+-- Pinned rows are invisible to both halves, which is the point: they
+-- neither get deleted nor consume a slot in the window. A user who pins
+-- fifty solves still keeps their most recent :keep unpinned ones.
+pruneGyroKeepingNewest:
+DELETE FROM solve_gyro
+WHERE user_id = :userId AND pinned = 0 AND solve_id NOT IN (
+    SELECT solve_id FROM solve_gyro
+    WHERE user_id = :userId AND pinned = 0
+    ORDER BY solved_at DESC, solve_id DESC LIMIT :keep
+);
+
+pruneGyroOlderThan:
+DELETE FROM solve_gyro
+WHERE user_id = :userId AND pinned = 0 AND solved_at < :cutoff;
+
+deleteAllGyroForUser:
+DELETE FROM solve_gyro WHERE user_id = :userId AND pinned = 0;

@@ -30,6 +30,7 @@ This document captures everything a developer should know to work on QBSmarter p
    - [Migrations](#migrations)
    - [Record queries and the ranking index](#record-queries-and-the-ranking-index)
    - [Ao5 as a maintained column](#ao5-as-a-maintained-column)
+   - [Solve reconstruction: `solve_moves` and `solve_gyro`](#solve-reconstruction-solve_moves-and-solve_gyro)
    - [Foreign keys](#foreign-keys)
 10. [Permissions, edge-to-edge & system bars](#permissions-edge-to-edge--system-bars)
 11. [Internationalisation](#internationalisation)
@@ -563,7 +564,7 @@ If the cube timestamps are degenerate (`first == last`) or non-monotonic (`last 
 
 ### Database & repositories
 
-**Schema files:** `shared/src/commonMain/sqldelight/com/zucham/qbsmarter/db/{Users, AppState, Cubes, CubeNames, Solves, Settings}.sq`, plus the `.sqm` migration files in the same directory (see *Migrations*). The `.sq` files always describe the *current* schema; each `.sqm` is a delta applied to installs that are behind, and `Schema.version` is the highest migration number plus one.
+**Schema files:** `shared/src/commonMain/sqldelight/com/zucham/qbsmarter/db/{Users, AppState, Cubes, CubeNames, Solves, SolveTracks, Settings}.sq`, plus the `.sqm` migration files in the same directory (see *Migrations*). The `.sq` files always describe the *current* schema; each `.sqm` is a delta applied to installs that are behind, and `Schema.version` is the highest migration number plus one.
 
 **Repository files:** `data/db/{UserRepository, DevicesRepository, SolvesRepository, SettingsRepository, Database}.kt`.
 
@@ -582,7 +583,7 @@ Three cases handled:
 
 #### `UserRepository.deleteProfile`
 
-Enforces the "always at least one profile" invariant. If you delete the only profile, a fresh empty one is auto-created and made active. If you delete the active profile, the next-most-recent profile becomes active. Cubes/solves/settings/names cascade-delete via FK — which, as of v1.3.0, is finally true rather than merely intended; see *Foreign keys*.
+Enforces the "always at least one profile" invariant. If you delete the only profile, a fresh empty one is auto-created and made active. If you delete the active profile, the next-most-recent profile becomes active. Cubes/solves/settings/names and the reconstruction tracks cascade-delete via FK — which, as of v1.3.0, is finally true rather than merely intended; see *Foreign keys*.
 
 #### `UserRepository.observeActive` and the rename-propagation fix
 
@@ -592,7 +593,7 @@ A naive `observeActiveId().map { id -> selectById(id).executeAsOneOrNull() }` on
 
 Effective solve time is `durationMs + penaltyMs` (excluding DNFs). DNF/+2 are stored separately so removing a +2 doesn't lose data. Stat queries (`bestDuration`, `bestAo5`, `pageByDurationAsc`) use the effective time and skip DNFs.
 
-It also owns the derived `ao5_ms` / `ao5_times` columns — computed inside the insert transaction from the rows the database holds, and repaired after every penalty edit, delete and import (see *Ao5 as a maintained column*).
+It also owns the derived `ao5_ms` / `ao5_times` columns — computed inside the insert transaction from the rows the database holds, and repaired after every penalty edit, delete and import (see *Ao5 as a maintained column*) — and the reconstruction tracks: `saveTracks`, `moveTrack` / `gyroTrack`, `setGyroPinned`, and the three retention sweeps.
 
 `pageByDurationDesc` (worst-time sort) puts DNFs at the top – treated as "very bad" – then descending effective time. `pageByDurationAsc` (best-time sort) puts DNFs at the bottom regardless.
 
@@ -1358,7 +1359,6 @@ created_at                                           name (advertised)         s
                                                                                is_dnf
                                                                                penalty_ms
                                                                                move_count
-                                                                               cube_mac  (no FK)
 ```
 
 - `app_state` is a single-row pattern: PK is constant 0 (`CHECK (id = 0)`), so it can hold at most one row. `INSERT OR IGNORE` bootstraps; `UPDATE` mutates.
@@ -1403,6 +1403,7 @@ The `.sq` files always describe the *current* schema. Each `.sqm` is a delta app
 | `3.sqm` | 3 → 4 | adds `solves.ao5_times` and backfills both Ao5 columns for the whole history |
 | `4.sqm` | 4 → 5 | replaces `solves_user_duration` with `solves_user_rank` and `solves_user_ao5` |
 | `5.sqm` | 5 → 6 | adds `solves.cube_mac` and `solves_user_cube` |
+| `6.sqm` | 6 → 7 | creates `solve_moves`, `solve_gyro` and `solve_gyro_prune` |
 
 **`1.sqm`.** Creates `cube_names` and carries every existing `cubes.name` across as an override belonging to the profile that currently owns the cube: whoever renamed a cube keeps seeing their name, nobody else inherits it. Cubes whose owning profile no longer exists are skipped — there is no profile for the name to belong to, and filtering here rather than relying on a cleanup elsewhere keeps this file correct under foreign-key enforcement on its own, which matters for a file that will still be run years after it was written.
 
@@ -1460,6 +1461,30 @@ Three bugs went away with this. The computation used to live in `SolveViewModel.
 Because the column is now trustworthy, `Ao5Stat` displays it rather than recomputing — the stat card and the History row can no longer disagree — and `MeanStat` / `Ao12Stat` were brought onto the same rules.
 
 **`ao5Ms` is no longer part of the import dedup fingerprint.** A derived column cannot identify the row it is derived for: the local value legitimately differs from a bundle written before the two histories were merged, and with it in the fingerprint re-importing your own backup would have duplicated every solve.
+
+### Solve reconstruction: `solve_moves` and `solve_gyro`
+
+Two side tables, one blob each, so a solve can be replayed turn by turn with the cube rotating as it actually did.
+
+**Side tables, not columns.** `pageByDateDesc` and friends are `SELECT *`; a blob on the `solves` row would be read on every History page and carried in every `SolveRow` the UI holds.
+
+**Blobs, not rows.** A row per move is ~40 bytes of SQLite overhead around 3 bytes of payload and multiplies the database's row count by ~55. The encodings in `domain/reconstruction/TrackCodecs.kt` — a face/direction nibble plus a varint delta for moves, smallest-three 32-bit quaternions plus varint deltas for gyro — measure at **2.87 B/move** and **5.2 B/sample**. Each blob carries a `format` column so a future encoding needs no migration.
+
+**One timeline.** `SmartCubeEvent.Gyro` carries only a device wall-clock timestamp; the solve's duration is defined by `SolveTimer` from cube-clock deltas. `SolveRecorder` buffers both streams in RAM for the length of the solve and, at `finish()`, projects the gyro samples onto the cube clock through `ClockSkewEstimator.predictCube` — the inverse of the regression the timer has been fitting all along. Projecting per packet would stamp early samples with a badly-fitted mapping and late ones with a better one, warping the middle of the timeline.
+
+**Deadband sampling.** `SolveRecorder` keeps a gyro sample when the pose has moved more than 3° from the last kept one, or 250 ms have passed. Simulated against a 15-second solve with six reorientations:
+
+| policy | samples | bytes | worst replay error |
+|---|---|---|---|
+| every packet (50 Hz source) | 750 | 3900 | 0.57° |
+| deadband 3° / 250 ms | 112 | 582 | 7.03° |
+| fixed 10 Hz | 150 | 780 | 10.63° |
+
+Two counter-intuitive results are worth keeping. **The threshold barely matters** — 2°, 3° and 5° keep the same number of samples, because during a flick consecutive packets are already 10–20° apart and clear any of them, while during stillness nothing reaches even 2° and it is the heartbeat that fires. The heartbeat is the real cost knob. And **the fidelity ceiling is the cube**: during a flick the deadband is already keeping every packet the cube sent, so the remaining error is slerp cutting the corner between widely-spaced poses. If the replay needs to look better, the win is a squad/Catmull-Rom interpolator at playback — no storage at all — not a higher sample rate.
+
+**Retention.** Move tracks are never pruned; at 1.6 MB per 10,000 solves there is no reason to. `solve_gyro` denormalises `user_id` and `solved_at` from its parent — the one deliberate duplication in this schema — so every retention rule is an indexed DELETE with no join: keep the newest N, drop everything older than a date, drop all of it. `pinned` exempts a track from all of them and is set automatically for a solve holding a record, so no housekeeping can quietly delete the replay of a personal best. `putGyro`'s upsert deliberately does **not** take `pinned` from the excluded row, so re-recording cannot clear a pin.
+
+`pruneGyroKeepingNewest` is phrased as "delete everything not in the newest N" rather than as a cutoff timestamp: an OFFSET is one row off from the count it reads like, and two solves sharing a `solved_at` to the millisecond cannot be separated by a comparison. The subquery names exactly N rows under a total order (`solved_at DESC, solve_id DESC`) and everything else goes.
 
 ### Foreign keys
 

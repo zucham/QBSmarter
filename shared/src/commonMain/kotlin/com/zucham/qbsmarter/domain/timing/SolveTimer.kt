@@ -33,10 +33,11 @@ import kotlinx.coroutines.launch
 class SolveTimer {
 
     /**
-     * Online linear-regression estimator of cube-clock vs device-clock,
-     * still maintained but no longer used by [finish]. Kept around so
-     * future stat code can convert cube timestamps to wall-clock for
-     * display without re-fitting from scratch.
+     * Online linear-regression estimator of cube-clock vs device-clock.
+     * Not used by [finish], which works in cube time throughout, but it
+     * is what [toCubeClock] inverts to put gyroscope samples — the one
+     * event with no cube timestamp on the wire — onto the same timeline
+     * as the moves.
      */
     private val estimator = ClockSkewEstimator()
 
@@ -69,6 +70,25 @@ class SolveTimer {
         if (firstCubeMs == null) firstCubeMs = cubeTimestamp
         lastCubeMs = cubeTimestamp
     }
+
+    /**
+     * Cube-clock timestamp of the solve's first move, or null before any
+     * move has been observed. This is the origin every reconstruction
+     * timestamp is relative to – see [com.zucham.qbsmarter.domain.reconstruction.SolveRecorder].
+     */
+    val firstMoveCubeMs: Long? get() = firstCubeMs
+
+    /**
+     * Project a device wall-clock timestamp onto the cube clock.
+     *
+     * Exposed for the gyroscope track, which is the one stream that
+     * arrives with no cube-clock timestamp of its own. The regression
+     * behind it is fitted from the solve's own moves, so this is only
+     * meaningful after [observeMove] has been called a few times – which
+     * is why the recorder holds its samples and calls this once, at the
+     * end, rather than per packet.
+     */
+    fun toCubeClock(deviceTimestamp: Long): Long = estimator.predictCube(deviceTimestamp)
 
     /**
      * Drive the displayed elapsed time at 16 ms. Idempotent – calling

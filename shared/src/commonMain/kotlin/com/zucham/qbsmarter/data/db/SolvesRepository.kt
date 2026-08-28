@@ -5,6 +5,11 @@ import app.cash.sqldelight.coroutines.mapToList
 import app.cash.sqldelight.coroutines.mapToOne
 import com.zucham.qbsmarter.db.QbsmarterDatabase
 import com.zucham.qbsmarter.db.Solves
+import com.zucham.qbsmarter.domain.reconstruction.GyroTrack
+import com.zucham.qbsmarter.domain.reconstruction.MoveTrack
+import com.zucham.qbsmarter.domain.reconstruction.TrackCodecs
+import com.zucham.qbsmarter.domain.reconstruction.TrackedGyro
+import com.zucham.qbsmarter.domain.reconstruction.TrackedMove
 import com.zucham.qbsmarter.domain.stats.Ao5
 import com.zucham.qbsmarter.domain.stats.Ao5Entry
 import kotlinx.coroutines.CoroutineDispatcher
@@ -300,7 +305,112 @@ class SolvesRepository(
         db.solvesQueries.cubesUsed(userId).executeAsList().map {
             CubeUsage(mac = it.mac ?: "", solveCount = it.solve_count, lastSolvedAt = it.last_solved_at ?: 0L)
         }
+
+    // -- Reconstruction tracks --------------------------------------------
+
+    /**
+     * Persist the move and gyro tracks recorded for a solve.
+     *
+     * Both are optional and stored independently: a solve whose cube has
+     * no gyroscope still gets a move track, and a recording that produced
+     * no usable gyro samples writes no gyro row rather than an empty one
+     * (an absent row and a zero-sample row would be the same thing said
+     * two ways, and only one of them survives a prune).
+     *
+     * Written in its own transaction *after* the solve row exists, not as
+     * part of the insert. Encoding a few hundred samples is real work and
+     * the insert happens on the timer's finish path; separating them
+     * keeps that path short, and a track that fails to write costs the
+     * replay of one solve rather than the solve itself.
+     */
+    fun saveTracks(
+        solveId: Long,
+        userId: String,
+        solvedAt: Long,
+        moves: List<TrackedMove>,
+        gyro: List<TrackedGyro>,
+        pinGyro: Boolean = false,
+    ) = db.transaction {
+        if (moves.isNotEmpty()) {
+            db.solveTracksQueries.putMoves(
+                solveId = solveId,
+                format = TrackCodecs.MOVE_FORMAT_V1.toLong(),
+                moveCount = moves.size.toLong(),
+                payload = TrackCodecs.encodeMoves(moves),
+            )
+        }
+        if (gyro.isNotEmpty()) {
+            db.solveTracksQueries.putGyro(
+                solveId = solveId,
+                userId = userId,
+                solvedAt = solvedAt,
+                format = TrackCodecs.GYRO_FORMAT_V1.toLong(),
+                sampleCount = gyro.size.toLong(),
+                pinned = if (pinGyro) 1L else 0L,
+                payload = TrackCodecs.encodeGyro(gyro),
+            )
+        }
+    }
+
+    /** Decoded move track for a solve, or null if none was recorded. */
+    fun moveTrack(solveId: Long): MoveTrack? {
+        val row = db.solveTracksQueries.selectMoves(solveId).executeAsOneOrNull() ?: return null
+        return TrackCodecs.decodeMoves(row.format.toInt(), row.payload)
+    }
+
+    /** Decoded gyro track for a solve, or null if none was recorded. */
+    fun gyroTrack(solveId: Long): GyroTrack? {
+        val row = db.solveTracksQueries.selectGyro(solveId).executeAsOneOrNull() ?: return null
+        return TrackCodecs.decodeGyro(row.format.toInt(), row.payload)
+    }
+
+    /**
+     * Whether a solve has rotation data and whether it is pinned, without
+     * reading the blob. Cheap enough for a list row to ask per item.
+     */
+    fun gyroStatus(solveId: Long): GyroStatus? =
+        db.solveTracksQueries.gyroStatus(solveId).executeAsOneOrNull()?.let {
+            GyroStatus(sampleCount = it.sample_count, pinned = it.pinned != 0L)
+        }
+
+    /**
+     * Pin or unpin a solve's gyro track. Pinned tracks are exempt from
+     * every retention rule – see `SolveTracks.sq`.
+     */
+    fun setGyroPinned(solveId: Long, pinned: Boolean) =
+        db.solveTracksQueries.setGyroPinned(if (pinned) 1L else 0L, solveId)
+
+    /**
+     * Delete one solve's rotation data at the user's request. Ignores the
+     * pin: a pin defends against automatic retention, not against the
+     * person who set it.
+     */
+    fun deleteGyroTrack(solveId: Long) = db.solveTracksQueries.deleteGyro(solveId)
+
+    /** How much gyro data this profile is holding. */
+    fun gyroUsage(userId: String): GyroUsage =
+        db.solveTracksQueries.gyroBytesForUser(userId).executeAsOne().let {
+            GyroUsage(bytes = it.bytes ?: 0L, tracks = it.tracks)
+        }
+
+    /** Retention: keep only the newest [keep] unpinned gyro tracks. */
+    fun pruneGyroKeepingNewest(userId: String, keep: Long) =
+        db.solveTracksQueries.pruneGyroKeepingNewest(userId, keep)
+
+    /** Retention: drop unpinned gyro tracks older than [cutoff] (epoch ms). */
+    fun pruneGyroOlderThan(userId: String, cutoff: Long) =
+        db.solveTracksQueries.pruneGyroOlderThan(userId, cutoff)
+
+    /** Retention: drop every unpinned gyro track for the profile. */
+    fun deleteAllGyroForUser(userId: String) =
+        db.solveTracksQueries.deleteAllGyroForUser(userId)
 }
 
 /** One cube's share of a profile's solve history. */
 data class CubeUsage(val mac: String, val solveCount: Long, val lastSolvedAt: Long)
+
+/** Presence and pin state of a solve's gyro track. */
+data class GyroStatus(val sampleCount: Long, val pinned: Boolean)
+
+/** Aggregate gyro storage held for a profile. */
+data class GyroUsage(val bytes: Long, val tracks: Long)

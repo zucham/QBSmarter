@@ -1,0 +1,22 @@
+-- Schema v6 → v7: the reconstruction tables.
+--
+-- Identical DDL to SolveTracks.sq — a migrated database and a fresh one
+-- must be indistinguishable.
+CREATE TABLE solve_moves (
+    solve_id INTEGER NOT NULL PRIMARY KEY REFERENCES solves(id) ON DELETE CASCADE,
+    format INTEGER NOT NULL,
+    move_count INTEGER NOT NULL,
+    payload BLOB NOT NULL
+);
+
+CREATE TABLE solve_gyro (
+    solve_id INTEGER NOT NULL PRIMARY KEY REFERENCES solves(id) ON DELETE CASCADE,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    solved_at INTEGER NOT NULL,
+    format INTEGER NOT NULL,
+    sample_count INTEGER NOT NULL,
+    pinned INTEGER NOT NULL DEFAULT 0,
+    payload BLOB NOT NULL
+);
+
+CREATE INDEX solve_gyro_prune ON solve_gyro(user_id, solved_at) WHERE pinned = 0;

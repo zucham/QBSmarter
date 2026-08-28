@@ -48,7 +48,49 @@ class ClockSkewEstimator {
         return (slope * x + intercept).toLong()
     }
 
+    /**
+     * The inverse of [predict]: given a device wall-clock timestamp, the
+     * cube-clock timestamp it corresponds to.
+     *
+     * This is what puts gyroscope samples on the same timeline as moves.
+     * `SmartCubeEvent.Gyro` carries only a device timestamp — no cube
+     * protocol reports a cube-clock time on a gyro packet — while a
+     * solve's whole timeline is defined by `Move.cubeTimestamp`. Without
+     * a projection the two streams would be recorded against two clocks
+     * that disagree by a drifting offset, and a replay would show the
+     * cube rotating a little before or after the turn that caused the
+     * rotation, drifting further apart the longer the solve ran.
+     *
+     * Only meaningful once the fit has points on both sides of the
+     * question; callers should hold their samples until the solve ends
+     * and [isReliable] is true, which is exactly what `SolveRecorder`
+     * does. Falls back to the identity when there is nothing fitted yet,
+     * matching [predict]'s behaviour in the same situation.
+     *
+     * A near-zero slope would mean the cube clock stood still while the
+     * device clock advanced — firmware misbehaving rather than drift —
+     * and is rejected in favour of the identity rather than divided by.
+     */
+    fun predictCube(deviceTs: Long): Long {
+        if (n == 0L) return deviceTs
+        val denom = n * sxx - sx * sx
+        if (denom == 0.0) return deviceTs
+        val slope = (n * sxy - sx * sy) / denom
+        if (slope < MIN_PLAUSIBLE_SLOPE) return deviceTs
+        val intercept = (sy - slope * sx) / n
+        return ((deviceTs.toDouble() - intercept) / slope).toLong()
+    }
+
     companion object {
         const val MIN_RELIABLE_SAMPLES = 20L
+
+        /**
+         * Below this, the fitted cube-per-device-millisecond rate is not
+         * drift, it is a broken clock, and inverting it would blow the
+         * projected timestamps up. Two clocks that are both roughly
+         * counting milliseconds have a slope near 1; a tenth of that is
+         * already far outside anything crystal drift can produce.
+         */
+        const val MIN_PLAUSIBLE_SLOPE = 0.1
     }
 }

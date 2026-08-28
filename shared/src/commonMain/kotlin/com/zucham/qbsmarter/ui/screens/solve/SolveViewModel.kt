@@ -20,6 +20,8 @@ import com.zucham.qbsmarter.domain.cube.applyMoves
 import com.zucham.qbsmarter.domain.driver.SmartCubeCommand
 import com.zucham.qbsmarter.domain.driver.SmartCubeDriver
 import com.zucham.qbsmarter.domain.driver.SmartCubeEvent
+import com.zucham.qbsmarter.domain.reconstruction.RecordedSolve
+import com.zucham.qbsmarter.domain.reconstruction.SolveRecorder
 import com.zucham.qbsmarter.domain.timing.SolveTimer
 import com.zucham.qbsmarter.ui.screens.solve.stats.SolveSession
 import com.zucham.qbsmarter.ui.screens.solve.stats.StatRegistry
@@ -80,6 +82,14 @@ class SolveViewModel(
 
     private val timer = SolveTimer()
     private val inspection = InspectionTimer(viewModelScope)
+
+    /**
+     * Buffers the move and gyroscope streams of the solve in flight. Fed
+     * from [handleMove] and [onCubeEvent]; drained once in [finishSolve].
+     * See [SolveRecorder] for why it buffers rather than streaming to
+     * the database.
+     */
+    private val recorder = SolveRecorder()
 
     /**
      * MAC of the cube the running solve is being done on, captured when
@@ -364,6 +374,7 @@ class SolveViewModel(
         if (_phase.value == SolvePhase.IDLE) return
         timer.reset()
         inspection.cancel()
+        recorder.cancel()
         solveCubeMac = null
         _moveCount.value = 0
         _scrambleProgress.value = 0
@@ -408,6 +419,7 @@ class SolveViewModel(
     fun newScramble() {
         timer.reset()
         inspection.cancel()
+        recorder.cancel()
         solveCubeMac = null
         _moveCount.value = 0
         cube.resetState()
@@ -448,6 +460,7 @@ class SolveViewModel(
         logicalState = CubeState.SOLVED
         timer.reset()
         inspection.cancel()
+        recorder.cancel()
         solveCubeMac = null
         _moveCount.value = 0
         _scrambleProgress.value = 0
@@ -536,7 +549,15 @@ class SolveViewModel(
             // feature (or hitting Reset orientation) has a real pose to
             // work from on the spot rather than waiting for the next
             // packet. It ignores samples for rendering while disabled.
-            is SmartCubeEvent.Gyro -> cube.gyroscope.onSample(event.quat)
+            is SmartCubeEvent.Gyro -> {
+                cube.gyroscope.onSample(event.quat)
+                // Offered unconditionally for the same reason the
+                // renderer takes it unconditionally: outside a solve the
+                // recorder only remembers the latest pose, which is what
+                // lets it seed a track with the orientation the cube is
+                // already in instead of opening on a blank one.
+                recorder.onGyro(event.quat, event.deviceTimestamp)
+            }
             else -> Unit
         }
     }
@@ -622,14 +643,21 @@ class SolveViewModel(
             SolvePhase.READY, SolvePhase.INSPECTION -> {
                 inspection.cancel()
                 _phase.value = SolvePhase.RUNNING
+                // Recording starts before the move is handed to the
+                // timer, so this first turn — the one that defines the
+                // timeline's zero — is inside the track rather than the
+                // one that got away.
+                recorder.start()
                 solveCubeMac = connectionSummary.value.cube?.mac
                 timer.startTicker(viewModelScope)
                 timer.observeMove(move.cubeTimestamp, move.deviceTimestamp)
+                recorder.onMove(move.face, move.cw, move.cubeTimestamp)
                 _moveCount.value += 1
                 checkPhaseAfterStateChange()
             }
             SolvePhase.RUNNING -> {
                 timer.observeMove(move.cubeTimestamp, move.deviceTimestamp)
+                recorder.onMove(move.face, move.cw, move.cubeTimestamp)
                 _moveCount.value += 1
                 checkPhaseAfterStateChange()
             }
@@ -753,6 +781,14 @@ class SolveViewModel(
         val cubeMac = solveCubeMac
         solveCubeMac = null
 
+        // Drain the recorder unconditionally, before any early return
+        // below can skip it. Its buffer belongs to the solve that just
+        // ended; leaving it filled would spill this solve's moves into
+        // the next one's track.
+        val recorded = timer.firstMoveCubeMs
+            ?.let { first -> recorder.finish(first, timer::toCubeClock) }
+            ?: run { recorder.cancel(); null }
+
         val uid = activeProfile.idSnapshot() ?: run {
             log.w { "finishSolve: no active profile, dropping" }
             return
@@ -776,15 +812,20 @@ class SolveViewModel(
         // the only way it can be right when caching is off, when a
         // penalty is applied later, or when the window straddles solves
         // older than the in-memory one. See `SolvesRepository.insert`.
+        val solvedAt = currentTimeMillis()
         val insertedId = solvesRepo.insert(
             userId = uid,
-            solvedAt = currentTimeMillis(),
+            solvedAt = solvedAt,
             durationMs = durationMs,
             scramble = _scramble.value,
             fluency = tps,
             moveCount = moveCount,
             cubeMac = cubeMac,
         )
+
+        if (recorded != null) {
+            persistTracks(insertedId, uid, solvedAt, recorded)
+        }
 
         // Surface the just-finished solve so the post-solve
         // action row can mark it +2 / DNF / clear-penalty. Initial
@@ -804,6 +845,53 @@ class SolveViewModel(
         // below recompute this whenever flags change.
         if (previousBest != null && durationMs < previousBest) {
             _newPbEvent.value = durationMs
+        }
+    }
+
+    /**
+     * Write the recorded tracks for a just-finished solve.
+     *
+     * Off the timer path deliberately. Encoding a few hundred gyro
+     * samples and writing two blobs is real work, and the user is
+     * looking at their time the instant [finishSolve] returns; none of
+     * it needs to happen before that. A failure here costs the replay of
+     * one solve and is logged, never propagated — the solve itself is
+     * already committed and is the thing that matters.
+     *
+     * The gyro track is pinned when the solve set a record, so that
+     * whatever retention policy the user later turns on cannot quietly
+     * delete the rotation replay of their best solve. That check runs
+     * here rather than inline for the same reason as everything else in
+     * this method: it is two more queries, and nothing on screen is
+     * waiting for them.
+     */
+    private fun persistTracks(
+        solveId: Long,
+        userId: String,
+        solvedAt: Long,
+        recorded: RecordedSolve,
+    ) {
+        viewModelScope.launch {
+            runCatching {
+                val row = solvesRepo.byId(solveId)
+                // Read the two values out first rather than chaining off
+                // `row?.` twice. The chained form leans on the compiler
+                // inferring `row != null` from `row?.ao5Ms != null`, which
+                // it does, but a record check that silently depends on a
+                // smart cast is a poor thing to leave lying around.
+                val effectiveMs = if (row != null && !row.isDnf) row.effectiveMs else null
+                val ao5Ms = row?.ao5Ms
+                val isRecordSingle = effectiveMs != null && effectiveMs == solvesRepo.bestDuration(userId)
+                val isRecordAo5 = ao5Ms != null && ao5Ms == solvesRepo.bestAo5(userId)
+                solvesRepo.saveTracks(
+                    solveId = solveId,
+                    userId = userId,
+                    solvedAt = solvedAt,
+                    moves = recorded.moves,
+                    gyro = recorded.gyro,
+                    pinGyro = isRecordSingle || isRecordAo5,
+                )
+            }.onFailure { log.w(it) { "persistTracks: failed for solve $solveId" } }
         }
     }
 
