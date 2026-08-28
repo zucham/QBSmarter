@@ -958,14 +958,32 @@ A two-effect pattern handles the swipe state: one effect raises the delete reque
 
 Sort options (chips at the top): newest, oldest, best time, worst time. Sort change scrolls back to the top.
 
-##### Scroll-to-top: screen entry AND sort change
+##### Scroll-to-top: window generations
 
-Two `LaunchedEffect`s use the same wait-for-load-cycle pattern (helper: `scrollToTopAfterLoadCycle(listState, vm)`):
+The VM publishes **one** value, not two: `HistoryWindow(generation, rows)`. `generation` increments on every *reset* of the window — sort change, profile switch, screen-entry refresh — and stays put while `maybeLoadMore()` appends pages or `delete()` optimistically drops a row. `resetAndLoadFirst(sort, uid, anchorTop)` bumps it at the moment it publishes the rows, never before.
 
-- `LaunchedEffect(Unit)` fires on screen entry: scrolls to top, calls `vm.refresh()`, waits for the loading cycle, scrolls again. Required because `AppNavHost` is wired with `saveState`/`restoreState`, so navigating back to History from another screen restores the previous `LazyListState` and could land the user mid-list. Sort hasn't changed, so the sort-change effect alone wouldn't fire.
-- `LaunchedEffect(sort)` fires on sort change: scrolls, waits for the new page to commit, scrolls again.
+The screen then needs exactly one effect:
 
-The wait-for-load-cycle is `vm.loading.drop(1).first { it }; vm.loading.first { !it }` – wait for the false→true→false cycle. A naive single `scrollToItem(0)` could land on the empty-list intermediate emission and then have `LazyColumn`'s saver snap to a remembered offset when the populated list arrives. Waiting for the cycle to fully commit makes the final scroll deterministic.
+```kotlin
+LaunchedEffect(window.generation) { listState.scrollToItem(0) }
+```
+
+Because generation and rows arrive in the same value, that effect fires in the same recomposition that first shows the new list.
+
+`refresh(anchorTop = false)` is the in-place variant, used by `setPenalty`: the rows may reorder under a time sort, but the user edited a row they were looking at and should not be thrown back to the top for it. Screen entry passes `anchorTop = true`, which is what covers `AppNavHost`'s `saveState`/`restoreState` restoring a mid-list `LazyListState` when navigating back to History.
+
+**What this replaced, and why.** The previous scheme waited on `vm.loading` cycling false → true → false (`vm.loading.drop(1).first { it }; vm.loading.first { !it }`) before scrolling. That is a race the UI usually loses: `setSort` writes the sort flow synchronously from the click, and the VM's collector commonly flipped `loading` to true *before* the recomposition that launched the waiting effect. `drop(1)` then ate the only `true` that cycle would ever emit, and the effect sat waiting for a load that might never come — so the scroll reset simply never ran.
+
+That left `LazyColumn`'s key-based scroll anchoring in charge. It remembers the key of the first visible row and, when the list changes underneath it, re-finds that key and scrolls to wherever it now lives. Best and Worst are near reverses of each other, so the row that had been at the top of the window turned up at the far end of the new one — and the list obediently jumped to the bottom, exactly the reported symptom.
+
+Two changes fix it independently, which is deliberate:
+
+1. **Item keys are scoped to the generation** (`"$generation#$id"`). A reset publishes a list whose keys share nothing with the one it replaces, so the anchoring has nothing to re-find and cannot chase a row across the sort. Within a generation the keys are stable, so appending a page or dropping a deleted row still holds the user's place.
+2. **The generation effect scrolls to the top**, covering the case where the user was scrolled deep into a large window: with no key to anchor on, `LazyColumn` keeps the raw index, which a fresh 50-row page would otherwise clamp to its end.
+
+##### Load-token guard on `loading`
+
+`loadToken` is a monotonic id stamped on each load; only the load still holding the token clears `_loading` in its `finally`. Without it, a page load cancelled by a reset (`loadJob?.cancel()`) runs its `finally` *after* the reset has already set `loading = true`, publishing a spurious `false` mid-reset — which hides the spinner and re-opens the `maybeLoadMore` gate while the reset query is still in flight. `maybeLoadMore` additionally re-checks the generation before appending, so a page that outlived its window can't splice old-sort rows onto the new one.
 
 ##### Solve card color
 

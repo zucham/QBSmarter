@@ -14,7 +14,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -52,8 +51,6 @@ import com.zucham.qbsmarter.ui.components.DialogButtonEmphasis
 import com.zucham.qbsmarter.ui.components.VerticalScrollbarBox
 import com.zucham.qbsmarter.util.formatDuration
 import com.zucham.qbsmarter.util.formatTps
-import kotlinx.coroutines.flow.drop
-import kotlinx.coroutines.flow.first
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
 import org.jetbrains.compose.resources.stringResource
@@ -89,37 +86,43 @@ import qbsmarter.shared.generated.resources.stat_fluency
 fun HistoryScreen() {
     val vm: HistoryViewModel = koinViewModel()
     val sort by vm.sort.collectAsState()
-    val items by vm.items.collectAsState()
+    val window by vm.window.collectAsState()
+    val items = window.rows
     val loading by vm.loading.collectAsState()
     val atEnd by vm.atEnd.collectAsState()
     val total by vm.totalCount.collectAsState()
     val listState = rememberLazyListState()
 
     // Refresh whenever the screen re-enters composition – picks up rows
-    // inserted by the timer while we were elsewhere – AND scroll the list
-    // back to the top.
-    //
-    // Why we can't rely on `LaunchedEffect(sort)` alone for entry: navigation
-    // restores the previous `LazyListState` (saveState/restoreState pattern
-    // wired in AppNavHost) so coming back to History from another screen
-    // can land the user mid-list. Sort hasn't changed, so the sort-change
-    // effect doesn't fire either. This effect explicitly scrolls to the
-    // top whenever the screen re-enters, then waits for the refresh-driven
-    // load cycle to commit so a final `scrollToItem(0)` lands on the
-    // actually-first row of the freshly loaded data (same robustness
-    // pattern as the sort-change effect below – see its docs for the
-    // emptyList-intermediate rationale).
+    // inserted by the timer while we were elsewhere. `anchorTop = true`
+    // makes the reload a new window generation, which the effect below
+    // turns into a scroll reset: navigation restores the previous
+    // `LazyListState` (the saveState/restoreState pattern wired in
+    // AppNavHost), so without it, coming back to History from another
+    // screen would land the user mid-list.
     LaunchedEffect(Unit) {
-        listState.scrollToItem(0)
-        vm.refresh()
-        scrollToTopAfterLoadCycle(listState, vm)
+        vm.refresh(anchorTop = true)
     }
 
-    // Sort changes start the user back at the top. Same wait-for-load-cycle
-    // approach as the screen-entry effect above.
-    LaunchedEffect(sort) {
+    // Every window reset – sort change, profile switch, screen entry –
+    // arrives as a new generation published together with its rows, so
+    // this effect fires in the same recomposition that first shows the
+    // new list, and lands the user at the top of it.
+    //
+    // This replaces an earlier scheme that waited on `vm.loading` cycling
+    // false → true → false before scrolling. That was a race: `setSort`
+    // writes to the VM's sort flow synchronously, and the VM's collector
+    // frequently flipped `loading` to true *before* the recomposition
+    // that started the waiting effect. The effect's `drop(1)` then ate
+    // the only `true` this cycle would ever emit and it sat waiting for
+    // the next load that might never come, leaving the scroll reset
+    // unapplied. That is what left the list parked at the bottom after
+    // switching between e.g. Best and Worst: those two sorts are near
+    // reverses of each other, so LazyColumn's key-based anchoring found
+    // the row that had been at the top now sitting at the far end of the
+    // window and dutifully scrolled there.
+    LaunchedEffect(window.generation) {
         listState.scrollToItem(0)
-        scrollToTopAfterLoadCycle(listState, vm)
     }
 
     // Watch the visible window; ask for more when close to the bottom.
@@ -180,7 +183,18 @@ fun HistoryScreen() {
                     .padding(end = gutterEnd),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                items(items = items, key = { it.id }) { row ->
+                // Keys are scoped to the window generation, so a reset
+                // publishes a list whose keys share nothing with the one
+                // it replaces. That switches off LazyColumn's key-based
+                // scroll anchoring across resets – it can't re-find the
+                // previous first-visible row, so it can't chase it to
+                // wherever the new sort put it. Within one generation the
+                // keys are stable, so appending a page (or optimistically
+                // dropping a deleted row) still keeps the user's place.
+                items(
+                    items = items,
+                    key = { row -> "${window.generation}#${row.id}" },
+                ) { row ->
                     SwipeableSolveItem(
                         row = row,
                         pendingDeleteId = pendingDelete?.id,
@@ -222,43 +236,6 @@ fun HistoryScreen() {
 
 /** Distance-from-bottom (in items) that triggers another window expansion. */
 private const val PREFETCH_TRIGGER = 10
-
-/**
- * Wait for the VM's load cycle to fully commit, then snap the list back
- * to the top.
- *
- * The reset-then-reload sequence inside the VM is:
- *   1. _loading.value = true
- *   2. _items.value = emptyList() (briefly, while the page query runs)
- *   3. _items.value = <new rows>
- *   4. _loading.value = false
- *
- * Earlier code did `vm.items.drop(1).first()` to wait for "the next items
- * emission". That worked on fast devices where a single emission
- * corresponded to "new sort applied", but on slow devices the LazyColumn
- * could observe the empty-list intermediate emission first – we'd
- * `scrollToItem(0)` against an empty list and then the populated list
- * would land, with LazyColumn snapping to whichever item-key offset its
- * saver had remembered (often somewhere mid-list).
- *
- * Robust approach: wait for the full loading cycle to complete (`loading`
- * cycling false → true → false). At that point the new page has been
- * committed to `_items` and a final `scrollToItem(0)` is guaranteed to
- * land on the actually-first row of the new list. If the screen entered
- * before the VM started loading, the initial `false` is harmlessly
- * skipped by `drop(1)`.
- */
-private suspend fun scrollToTopAfterLoadCycle(
-    listState: LazyListState,
-    vm: HistoryViewModel,
-) {
-    vm.loading
-        .drop(1)
-        .first { it }   // wait for loading=true (cycle start)
-    vm.loading
-        .first { !it }  // wait for loading=false (cycle end)
-    listState.scrollToItem(0)
-}
 
 @OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
 @Composable
