@@ -35,41 +35,86 @@ class FastestStat : SolveStat {
     override val label = Res.string.stat_best
     override fun compute(history: List<SolveRow>, current: SolveSession): String? {
         val best = current.bestDurationMs
-            ?: history.minOfOrNull { it.effectiveMs }
+            ?: history.filter { !it.isDnf }.minOfOrNull { it.effectiveMs }
             ?: return null
         return formatDuration(best)
     }
 }
 
+/**
+ * Mean of every solve in the window, in **effective** time, with DNFs
+ * left out.
+ *
+ * Both of those used to be wrong: it averaged raw `durationMs`, so a +2
+ * never showed up in the mean, and it included DNFs at their recorded
+ * time, so a solve the user explicitly marked as failed pulled the
+ * average around as if it had counted. `Solves.sq` has always documented
+ * that stats work in effective time and skip DNFs; this now does.
+ */
 class MeanStat : SolveStat {
     override val id = "mean"
     override val label = Res.string.stat_mean
     override fun compute(history: List<SolveRow>, current: SolveSession): String? {
-        if (history.isEmpty()) return null
-        return formatDuration(history.map { it.durationMs }.average().toLong())
+        val times = history.filter { !it.isDnf }.map { it.effectiveMs }
+        if (times.isEmpty()) return null
+        return formatDuration(times.average().toLong())
     }
 }
 
+/**
+ * The most recent solve's Ao5, read straight off its persisted
+ * `ao5_ms` rather than recomputed here.
+ *
+ * Recomputing was how the stat card and the History row came to disagree:
+ * the card trimmed a sorted window of raw durations, the stored column
+ * was written by a third piece of code, and neither applied the DNF rule.
+ * The database now holds a value maintained by `Ao5` on every path that
+ * can change it, so the card's job is to display it, not to have an
+ * opinion about it.
+ *
+ * A null `ao5Ms` on the newest solve means either fewer than five solves
+ * or a window with two or more DNFs; both correctly hide the row.
+ */
 class Ao5Stat : SolveStat {
     override val id = "ao5"
     override val label = Res.string.stat_ao5
     override fun compute(history: List<SolveRow>, current: SolveSession): String? =
-        trimmedAverage(history.map { it.durationMs }.take(5))?.let(::formatDuration)
+        history.firstOrNull()?.ao5Ms?.let(::formatDuration)
 }
 
+/**
+ * Ao12 over the newest twelve solves. Still computed here — unlike Ao5
+ * there is no persisted column to read — but under the same rules
+ * `Ao5` applies: effective time, and a DNF is the worst result rather
+ * than a number.
+ */
 class Ao12Stat : SolveStat {
     override val id = "ao12"
     override val label = Res.string.stat_ao12
     override fun compute(history: List<SolveRow>, current: SolveSession): String? =
-        trimmedAverage(history.map { it.durationMs }.take(12))?.let(::formatDuration)
+        trimmedAverage(history.take(12))?.let(::formatDuration)
 }
 
-/** WCA-ish trimmed average: drop top/bottom 5% (≥1 each). Returns null if too few. */
-private fun trimmedAverage(times: List<Long>): Long? {
-    if (times.size < 5) return null
-    val n = times.size
+/**
+ * WCA-style trimmed average: drop the fastest and slowest 5% (at least
+ * one each) and mean the rest.
+ *
+ * DNFs are not "very slow times" – they have no time at all – so they
+ * are counted, trimmed as the worst results, and never contribute a
+ * number to the mean. If more of them are trimmed away than the trim
+ * allows for, the average is itself a DNF and this returns null, which
+ * is the same rule `Ao5` applies to a window holding two DNFs.
+ */
+private fun trimmedAverage(window: List<SolveRow>): Long? {
+    val n = window.size
+    if (n < 5) return null
     val trim = (n * 0.05).toInt().coerceAtLeast(1)
-    val middle = times.sorted().subList(trim, n - trim)
+    val dnfCount = window.count { it.isDnf }
+    if (dnfCount > trim) return null
+    val times = window.filter { !it.isDnf }.map { it.effectiveMs }.sorted()
+    // The DNFs have already been removed from the top; only the
+    // remaining slow end still needs trimming, along with the fast end.
+    val middle = times.subList(trim, (n - trim).coerceAtMost(times.size))
     return if (middle.isEmpty()) null else middle.average().toLong()
 }
 

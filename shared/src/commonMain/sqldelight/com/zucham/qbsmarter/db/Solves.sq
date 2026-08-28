@@ -19,7 +19,24 @@
 -- (e.g. tests inserting via the repo without the new field) keep
 -- compiling. Not used by any stat – it's a History-only field by
 -- product spec.
-
+--
+-- ao5_times: the five effective times the row's `ao5_ms` was computed
+-- from, oldest first, comma-separated, with a DNF written as `D` –
+-- e.g. `12402,29351,D,39537,10112`. NULL exactly when the profile had
+-- fewer than five solves at this point and there was no window at all.
+--
+-- Note this is NOT the same condition as `ao5_ms IS NULL`. A window
+-- holding two or more DNFs has five real times but no average (the WCA
+-- rule), so the pair reads `ao5_times` present, `ao5_ms` NULL, and the
+-- UI shows the five times under a "DNF" average. The two columns answer
+-- two different questions – "was there a window" and "did it produce a
+-- number" – and collapsing them would lose the distinction.
+--
+-- It is a *snapshot*, deliberately not five foreign keys: deleting one
+-- of the contributing solves must not erase what the average was made
+-- of, and the five rows may be far outside any window the app still has
+-- in memory.
+--
 CREATE TABLE solves (
     id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -31,15 +48,16 @@ CREATE TABLE solves (
     extras TEXT,
     is_dnf INTEGER NOT NULL DEFAULT 0,
     penalty_ms INTEGER NOT NULL DEFAULT 0,
-    move_count INTEGER NOT NULL DEFAULT 0
+    move_count INTEGER NOT NULL DEFAULT 0,
+    ao5_times TEXT
 );
 
 CREATE INDEX solves_user_solved_at ON solves(user_id, solved_at DESC);
 CREATE INDEX solves_user_duration ON solves(user_id, duration_ms ASC);
 
 insert:
-INSERT INTO solves (user_id, solved_at, duration_ms, scramble, ao5_ms, fluency, extras, is_dnf, penalty_ms, move_count)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+INSERT INTO solves (user_id, solved_at, duration_ms, scramble, ao5_ms, ao5_times, fluency, extras, is_dnf, penalty_ms, move_count)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 -- SQLite-specific: returns the id of the most recently INSERTed row in
 -- the current connection. Used immediately after `insert` (in the same
@@ -84,6 +102,39 @@ pageByDurationDesc:
 -- non-DNFs by effective time descending.
 SELECT * FROM solves WHERE user_id = :userId
 ORDER BY is_dnf DESC, (duration_ms + penalty_ms) DESC LIMIT :limit OFFSET :offset;
+
+selectById:
+SELECT * FROM solves WHERE id = :id;
+
+-- The five most recent solves at or before a given point in the
+-- profile's timeline, newest first. This is the window an Ao5 is
+-- computed over.
+--
+-- Ordered by (solved_at, id) so two solves recorded in the same
+-- millisecond still have a total order, and the same one everywhere:
+-- the migration's backfill window, this query, and the live computation
+-- in SolveViewModel must agree or a solve's stored Ao5 stops matching
+-- its stored ao5_times.
+windowEndingAt:
+SELECT * FROM solves
+WHERE user_id = :userId AND (solved_at < :solvedAt OR (solved_at = :solvedAt AND id <= :id))
+ORDER BY solved_at DESC, id DESC LIMIT 5;
+
+-- Every solve whose Ao5 window contains the given solve – itself plus
+-- the four that follow it. Used to find the rows whose ao5_ms/ao5_times
+-- a penalty edit or a delete invalidates.
+solvesAffectedByChangeAt:
+SELECT * FROM solves
+WHERE user_id = :userId AND (solved_at > :solvedAt OR (solved_at = :solvedAt AND id >= :id))
+ORDER BY solved_at ASC, id ASC LIMIT 5;
+
+-- Every solve for a profile in Ao5 window order. Used by the post-import
+-- rebuild, which cannot rely on rows arriving in chronological order.
+allAscending:
+SELECT * FROM solves WHERE user_id = :userId ORDER BY solved_at ASC, id ASC;
+
+updateAo5:
+UPDATE solves SET ao5_ms = :ao5Ms, ao5_times = :ao5Times WHERE id = :id;
 
 updatePenalty:
 -- Mark a solve as DNF, +2, or back to OK. Called from the post-solve

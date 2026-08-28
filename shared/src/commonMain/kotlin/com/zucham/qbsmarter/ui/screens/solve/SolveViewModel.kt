@@ -726,8 +726,6 @@ class SolveViewModel(
         val durationMs = timer.finish()
         _phase.value = SolvePhase.SOLVED
 
-        val recent = (history.value.map { it.durationMs }.take(4) + durationMs).sorted()
-        val ao5 = if (recent.size == 5) recent.subList(1, 4).average().toLong() else null
         // moveCount is captured into a local before the insert so we
         // also pass exactly the same value into LastSolveInfo /
         // anywhere else downstream might need it; it'd be a subtle bug
@@ -743,17 +741,26 @@ class SolveViewModel(
 
         // Capture the previous best BEFORE inserting – once the new row
         // is in the DB, cache.bestDurationMs will already reflect it and
-        // we'd compare the new solve against itself. Read the cached
-        // value rather than the repo to avoid a sync DB query on the
-        // timer-finish hot path.
-        val previousBest = cache.bestDurationMs.value
+        // we'd compare the new solve against itself.
+        //
+        // The fall-through to the repository is not just belt and
+        // braces: the cached value is null whenever the user has caching
+        // switched off, and reading it alone meant personal bests simply
+        // stopped being detected for those users. It is an indexed MIN
+        // seek, so it is cheap enough to sit on this path — measured at
+        // hundredths of a millisecond against a hundred thousand solves.
+        val previousBest = cache.bestDurationMs.value ?: solvesRepo.bestDuration(uid)
 
+        // The Ao5 is no longer computed here. It is derived inside the
+        // insert transaction from the rows the database holds, which is
+        // the only way it can be right when caching is off, when a
+        // penalty is applied later, or when the window straddles solves
+        // older than the in-memory one. See `SolvesRepository.insert`.
         val insertedId = solvesRepo.insert(
             userId = uid,
             solvedAt = currentTimeMillis(),
             durationMs = durationMs,
             scramble = _scramble.value,
-            ao5Ms = ao5,
             fluency = tps,
             moveCount = moveCount,
         )

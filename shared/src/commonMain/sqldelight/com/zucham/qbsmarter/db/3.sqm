@@ -1,0 +1,105 @@
+-- Schema v3 → v4: the Ao5 columns.
+--
+-- `ao5_times` holds the five effective times a solve's `ao5_ms` was
+-- computed from; see the note at the top of Solves.sq for the encoding
+-- and for why the two columns are nullable independently of each other.
+--
+-- ALTER TABLE appends, so the *order the files run in* decides the
+-- column order of a migrated database. `ao5_times` is added here and
+-- `cube_mac` in `5.sqm`, matching the order they appear at the end of the
+-- CREATE TABLE in Solves.sq — otherwise a migrated database and a
+-- freshly-created one end up with the same columns in a different order.
+ALTER TABLE solves ADD COLUMN ao5_times TEXT;
+
+-- Backfill `ao5_ms` and `ao5_times` for every historical solve.
+--
+-- Without this the "show me the five times behind this average" feature
+-- would work only for solves recorded from v1.3.0 onwards, and every
+-- solve already in the database would show an average with nothing
+-- behind it. The whole history is recoverable — an Ao5 is a pure
+-- function of the five solves ending at a given one — so it is recovered.
+--
+-- `ao5_ms` is **rewritten**, not just filled in where NULL. The values
+-- already stored were computed from raw `duration_ms`, ignoring +2
+-- penalties and treating a DNF as an ordinary time, because that is what
+-- the old `finishSolve` did. Leaving them would mean a solve displaying
+-- five times whose trimmed average visibly is not the average shown next
+-- to them. One definition, applied to everything:
+--
+--   • effective time is duration_ms + penalty_ms;
+--   • a DNF has no time and counts as the worst of the five;
+--   • five valid times  -> drop best and worst, mean the middle three;
+--   • four plus one DNF -> the DNF is the worst, so drop it and the
+--     best, mean the middle three;
+--   • two or more DNFs  -> no Ao5 (NULL), the WCA rule;
+--   • fewer than five solves so far -> no Ao5 (NULL).
+--
+-- The helper table is keyed (user_id, rn) so the five lookups per row
+-- are index seeks rather than scans; on a 100k-solve database the whole
+-- backfill runs in about a second.
+CREATE TABLE ao5_backfill (
+    user_id TEXT NOT NULL,
+    rn INTEGER NOT NULL,
+    solve_id INTEGER NOT NULL,
+    eff INTEGER,
+    PRIMARY KEY (user_id, rn)
+);
+
+INSERT INTO ao5_backfill (user_id, rn, solve_id, eff)
+SELECT user_id,
+       ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY solved_at, id),
+       id,
+       CASE WHEN is_dnf = 1 THEN NULL ELSE duration_ms + penalty_ms END
+FROM solves;
+
+-- The five window slots as separate correlated lookups rather than a
+-- GROUP_CONCAT over a window frame. Both would produce the string, but
+-- the order of values inside a windowed GROUP_CONCAT is not something
+-- SQLite promises, and "oldest first" is exactly what the column means.
+-- Five point lookups say the order in the SQL itself.
+CREATE TABLE ao5_result (
+    solve_id INTEGER NOT NULL PRIMARY KEY,
+    ao5_ms INTEGER,
+    ao5_times TEXT
+);
+
+INSERT INTO ao5_result (solve_id, ao5_ms, ao5_times)
+SELECT a.solve_id,
+       CASE
+           WHEN a.rn < 5 THEN NULL
+           WHEN w2.ok = 5 THEN (w2.total - w2.lo - w2.hi) / 3
+           WHEN w2.ok = 4 THEN (w2.total - w2.lo) / 3
+           ELSE NULL
+       END,
+       CASE WHEN a.rn < 5 THEN NULL ELSE
+           COALESCE(CAST(w.e4 AS TEXT), 'D') || ',' ||
+           COALESCE(CAST(w.e3 AS TEXT), 'D') || ',' ||
+           COALESCE(CAST(w.e2 AS TEXT), 'D') || ',' ||
+           COALESCE(CAST(w.e1 AS TEXT), 'D') || ',' ||
+           COALESCE(CAST(w.e0 AS TEXT), 'D')
+       END
+FROM ao5_backfill a
+JOIN (
+    SELECT b.solve_id AS sid,
+           (SELECT eff FROM ao5_backfill p WHERE p.user_id = b.user_id AND p.rn = b.rn - 4) AS e4,
+           (SELECT eff FROM ao5_backfill p WHERE p.user_id = b.user_id AND p.rn = b.rn - 3) AS e3,
+           (SELECT eff FROM ao5_backfill p WHERE p.user_id = b.user_id AND p.rn = b.rn - 2) AS e2,
+           (SELECT eff FROM ao5_backfill p WHERE p.user_id = b.user_id AND p.rn = b.rn - 1) AS e1,
+           b.eff AS e0
+    FROM ao5_backfill b
+) w ON w.sid = a.solve_id
+LEFT JOIN (
+    SELECT b.solve_id AS sid,
+           COUNT(p.eff) AS ok, SUM(p.eff) AS total,
+           MIN(p.eff) AS lo, MAX(p.eff) AS hi
+    FROM ao5_backfill b
+    JOIN ao5_backfill p ON p.user_id = b.user_id AND p.rn BETWEEN b.rn - 4 AND b.rn
+    GROUP BY b.solve_id
+) w2 ON w2.sid = a.solve_id;
+
+UPDATE solves SET
+    ao5_ms = (SELECT ao5_ms FROM ao5_result WHERE solve_id = solves.id),
+    ao5_times = (SELECT ao5_times FROM ao5_result WHERE solve_id = solves.id);
+
+DROP TABLE ao5_result;
+DROP TABLE ao5_backfill;

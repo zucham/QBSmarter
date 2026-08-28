@@ -28,6 +28,7 @@ This document captures everything a developer should know to work on QBSmarter p
 9. [Database schema](#database-schema)
    - [Per-profile cube names](#per-profile-cube-names)
    - [Migrations](#migrations)
+   - [Ao5 as a maintained column](#ao5-as-a-maintained-column)
    - [Foreign keys](#foreign-keys)
 10. [Permissions, edge-to-edge & system bars](#permissions-edge-to-edge--system-bars)
 11. [Internationalisation](#internationalisation)
@@ -589,6 +590,8 @@ A naive `observeActiveId().map { id -> selectById(id).executeAsOneOrNull() }` on
 #### `SolvesRepository`
 
 Effective solve time is `durationMs + penaltyMs` (excluding DNFs). DNF/+2 are stored separately so removing a +2 doesn't lose data. Stat queries (`bestDuration`, `pageByDurationAsc`) use the effective time and skip DNFs.
+
+It also owns the derived `ao5_ms` / `ao5_times` columns — computed inside the insert transaction from the rows the database holds, and repaired after every penalty edit, delete and import (see *Ao5 as a maintained column*).
 
 `pageByDurationDesc` (worst-time sort) puts DNFs at the top – treated as "very bad" – then descending effective time. `pageByDurationAsc` (best-time sort) puts DNFs at the bottom regardless.
 
@@ -1347,10 +1350,11 @@ display_name                active_user_id ─→ users  mac UNIQUE             
 created_at                                           name (advertised)         solved_at
                                                      last_seen                 duration_ms
                                                      user_id ─→ users          scramble
-                                                     hw_version                ao5_ms
-                                                     sw_version                fluency
-                                                     gyro_supported            extras
-                                                     vendor (default 'gan')    is_dnf
+                                                     hw_version                ao5_ms      ─┐ derived
+                                                     sw_version                ao5_times   ─┘
+                                                     gyro_supported            fluency
+                                                     vendor (default 'gan')    extras
+                                                                               is_dnf
                                                                                penalty_ms
                                                                                move_count
 ```
@@ -1364,6 +1368,7 @@ created_at                                           name (advertised)         s
 - **Foreign keys are enforced.** `DriverFactory` (Android) passes an `AndroidSqliteDriver.Callback` whose `onConfigure` calls `setForeignKeyConstraintsEnabled(true)`. Until v1.3.0 nothing did, so *every* `ON DELETE CASCADE` in this schema was inert and `deleteProfile` silently orphaned the profile's cubes, solves and settings. See *Foreign keys* below.
 - `solves` indexes: `(user_id, solved_at DESC)` and `(user_id, duration_ms ASC)`. Both used by the History sort modes.
 - `solves.bestDuration` returns `MIN(duration_ms + penalty_ms)` skipping DNFs. Aliased `AS best` so the generated row class has a stable Kotlin property name.
+- `solves.ao5_ms` / `ao5_times` are **derived** columns, maintained by `Ao5` on every path that can change them (insert, penalty edit, delete, import rebuild). `ao5_times` holds the five effective times oldest-first with `D` for a DNF. They are nullable independently: a window of five holding two DNFs has times but no average.
 - `solves.move_count` (default 0) is the total cube turns recorded during the solve. Already counted at runtime by `SolveViewModel` for the live TPS calculation (`fluency = moveCount * 1000 / durationMs`); persisting it lets the History detail dialog show "Turns: N" alongside the time. **Not consumed by any stat** – it's a History-only field by product spec. The 0 default keeps the column SQL-compatible with old call sites (e.g. tests that insert via the repo without the new arg) and lets the History dialog hide the row for pre-feature data via a `> 0` guard.
 - `settings` value is always TEXT; typed accessors in `SettingsRepository` parse to bool/int/string.
 
@@ -1392,12 +1397,38 @@ The `.sq` files always describe the *current* schema. Each `.sqm` is a delta app
 |---|---|---|
 | `1.sqm` | 1 → 2 | creates `cube_names` and copies each existing `cubes.name` across as a per-profile override |
 | `2.sqm` | 2 → 3 | deletes the rows orphaned by profile deletions made while foreign keys were unenforced |
+| `3.sqm` | 3 → 4 | adds `solves.ao5_times` and backfills both Ao5 columns for the whole history |
 
 **`1.sqm`.** Creates `cube_names` and carries every existing `cubes.name` across as an override belonging to the profile that currently owns the cube: whoever renamed a cube keeps seeing their name, nobody else inherits it. Cubes whose owning profile no longer exists are skipped — there is no profile for the name to belong to, and filtering here rather than relying on a cleanup elsewhere keeps this file correct under foreign-key enforcement on its own, which matters for a file that will still be run years after it was written.
 
 `cubes.name` is deliberately **not** cleared. Post-migration it means "the advertised name", and for a renamed cube it briefly holds the user's label instead — harmless, because the owning profile now reads its name from `cube_names`, and the next connect overwrites the column with the real advertised name. Clearing it would be worse: it would blank the fallback name for every cube never connected again.
 
 **`2.sqm`.** Deletes rows in `settings`, `solves`, `cubes` and `cube_names` whose `user_id` no longer exists — the wreckage of every profile deletion made while foreign keys were unenforced (see *Foreign keys*). The pragma alone does not clean this up: enforcement validates what you write, not what is already stored, so without the sweep those rows would outlive every future release, counted by `PRAGMA foreign_key_check` and by nothing else. `cube_names` cannot actually hold orphans — `1.sqm` filters them out and every write since goes through an enforced key — and is swept anyway, because a sweep naming four tables reads better than three tables and a paragraph about the fourth.
+
+**`3.sqm`.** Adds `ao5_times` and backfills both Ao5 columns for every historical solve — without it the "show me the five times behind this average" feature would work only for solves recorded from here on.
+
+`ao5_ms` is **rewritten**, not merely filled in where NULL: the stored values were computed from raw `duration_ms` ignoring penalties and DNFs, so leaving them would mean a solve displaying five times whose trimmed average is visibly not the average printed beside them. `ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY solved_at, id)` materialises a ranked helper table keyed `(user_id, rn)`, and the five window slots are read as five indexed point lookups — deliberately not a `GROUP_CONCAT` over a window frame, because the order of values inside one is not something SQLite promises and "oldest first" is exactly what the column means. Both helper tables are dropped before the file ends. Window functions need SQLite 3.25; `minSdk = 29` ships 3.28, and the SQLDelight dialect is already pinned to 3.25.
+
+ALTER TABLE appends, so the order the files run in decides a migrated database's column order: `ao5_times` here and `cube_mac` in `5.sqm`, matching the order they appear at the end of the `CREATE TABLE` in `Solves.sq`.
+
+Verified by executing the whole chain against a real SQLite database built from the v1-era schema, from every starting version, with foreign keys on and orphans present: ~1 s for 50,000 solves, `PRAGMA integrity_check` and `foreign_key_check` clean, all 100,000 backfilled Ao5 values matching an independent implementation, and the resulting schema identical to a database created fresh from the `.sq` files.
+
+### Ao5 as a maintained column
+
+An Ao5 belongs to a solve but is a fact about its *neighbours*, which is what makes it awkward. `domain/stats/Ao5.kt` is the single definition — effective time, DNF as "no time" rather than a large one, drop best and worst, two DNFs means no average — and every path that can invalidate a stored value re-derives it through that one object:
+
+| event | what is repaired |
+|---|---|
+| insert | the new solve, inside the insert transaction |
+| penalty / DNF edit | that solve and the four after it (`solvesAffectedByChangeAt`) |
+| delete | the up-to-four solves that had it in their window |
+| import | the whole profile, one ordered pass (`rebuildAo5ForUser`) |
+
+Three bugs went away with this. The computation used to live in `SolveViewModel.finishSolve` and read `AppCache.recentSolves`, which is **gated on the `app.cacheEnabled` setting** — so with caching off the window was empty, `ao5_ms` stopped being written entirely, and personal-best detection (reading the same cache) went with it. It averaged raw `durationMs`, so a +2 never counted. And it ignored DNFs, so a failed solve entered the average as an ordinary time.
+
+Because the column is now trustworthy, `Ao5Stat` displays it rather than recomputing — the stat card and the History row can no longer disagree — and `MeanStat` / `Ao12Stat` were brought onto the same rules.
+
+**`ao5Ms` is no longer part of the import dedup fingerprint.** A derived column cannot identify the row it is derived for: the local value legitimately differs from a bundle written before the two histories were merged, and with it in the fingerprint re-importing your own backup would have duplicated every solve.
 
 ### Foreign keys
 

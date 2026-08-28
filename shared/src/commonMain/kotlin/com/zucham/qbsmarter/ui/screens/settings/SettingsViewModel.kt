@@ -338,8 +338,10 @@ class SettingsViewModel(
      *    Local-only keys (not in bundle) survive.
      *  - Solves: appended, **with full-field deduplication** within the
      *    target profile. Two solves are considered identical when every
-     *    persisted field matches: `solvedAt`, `durationMs`, `scramble`,
-     *    `ao5Ms`, `fluency`, `extras`, `isDnf`, `penaltyMs`, `moveCount`.
+     *    *recorded* field matches: `solvedAt`, `durationMs`, `scramble`,
+     *    `fluency`, `extras`, `isDnf`, `penaltyMs`, `moveCount`. The
+     *    derived `ao5Ms` is not compared and not imported; the whole
+     *    profile's averages are rebuilt once the batch is in.
      *    The solve's auto-generated DB `id` is intentionally NOT part of
      *    the fingerprint – it's local to each DB and would never match
      *    across exports. `moveCount` participates despite being a
@@ -414,12 +416,11 @@ class SettingsViewModel(
             for (s in p.solves) {
                 val fp = s.toFingerprint()
                 if (!existingFingerprints.add(fp)) continue
-                solvesRepo.insert(
+                solvesRepo.insertForImport(
                     userId = targetId,
                     solvedAt = s.solvedAt,
                     durationMs = s.durationMs,
                     scramble = s.scramble,
-                    ao5Ms = s.ao5Ms,
                     fluency = s.fluency,
                     extras = s.extras,
                     isDnf = s.isDnf,
@@ -427,6 +428,12 @@ class SettingsViewModel(
                     moveCount = s.moveCount,
                 )
             }
+
+            // Derive every Ao5 in the merged history in one ordered pass.
+            // It has to happen after the whole batch: an imported solve
+            // dated between two existing ones changes their averages
+            // too, and nothing about the insert order tells us which.
+            solvesRepo.rebuildAo5ForUser(targetId)
         }
 
         // Honour the bundle's activeProfileId if it resolves locally.
@@ -466,6 +473,7 @@ class SettingsViewModel(
         solvedAt = row.solvedAt, durationMs = row.durationMs, scramble = row.scramble,
         ao5Ms = row.ao5Ms, fluency = row.fluency, extras = row.extras,
         isDnf = row.isDnf, penaltyMs = row.penaltyMs, moveCount = row.moveCount,
+        ao5Times = row.ao5Times,
     )
 
     private fun toExportCube(cube: PairedCube) = ExportCube(
@@ -557,6 +565,14 @@ data class ExportSolve(
     // solves with the same time/scramble but different turn counts
     // don't merge.
     val moveCount: Long = 0L,
+    /**
+     * The five times behind [ao5Ms], in the encoding
+     * `com.zucham.qbsmarter.domain.stats.Ao5` defines. Exported for
+     * completeness; the importer does **not** restore it, because both
+     * it and [ao5Ms] are derived from a set of solves that the importing
+     * database does not have — see `SolvesRepository.insertForImport`.
+     */
+    val ao5Times: String? = null,
 )
 
 @Serializable
@@ -610,6 +626,15 @@ data class ExportCube(
  * moveCount bundles the field defaults to 0L on both sides of the
  * comparison, so older bundles round-trip unchanged.
  *
+ * `ao5Ms` was in this list and has been taken out, because it stopped
+ * being a fact about the solve and became a fact about its *neighbours*.
+ * It is now re-derived after every import, penalty edit and delete, so
+ * the local value legitimately differs from the one in a bundle written
+ * before those solves were merged — and with it in the fingerprint, that
+ * difference read as "a different solve" and re-importing your own
+ * backup would have duplicated your entire history. A derived column
+ * cannot identify the row it is derived for.
+ *
  * Equality / hashCode come for free from `data class`. We hold these in
  * a `HashSet<SolveFingerprint>` to make the dedup check O(1) per row
  * instead of O(N).
@@ -618,7 +643,6 @@ private data class SolveFingerprint(
     val solvedAt: Long,
     val durationMs: Long,
     val scramble: String,
-    val ao5Ms: Long?,
     val fluency: Double?,
     val extras: String?,
     val isDnf: Boolean,
@@ -628,12 +652,12 @@ private data class SolveFingerprint(
 
 private fun SolveRow.toFingerprint() = SolveFingerprint(
     solvedAt = solvedAt, durationMs = durationMs, scramble = scramble,
-    ao5Ms = ao5Ms, fluency = fluency, extras = extras,
+    fluency = fluency, extras = extras,
     isDnf = isDnf, penaltyMs = penaltyMs, moveCount = moveCount,
 )
 
 private fun ExportSolve.toFingerprint() = SolveFingerprint(
     solvedAt = solvedAt, durationMs = durationMs, scramble = scramble,
-    ao5Ms = ao5Ms, fluency = fluency, extras = extras,
+    fluency = fluency, extras = extras,
     isDnf = isDnf, penaltyMs = penaltyMs, moveCount = moveCount,
 )
