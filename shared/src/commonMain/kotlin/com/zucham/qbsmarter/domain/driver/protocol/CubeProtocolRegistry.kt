@@ -6,6 +6,7 @@ import com.zucham.qbsmarter.domain.driver.gan.GanGen2Protocol
 import com.zucham.qbsmarter.domain.driver.gan.GanGen3Protocol
 import com.zucham.qbsmarter.domain.driver.gan.GanGen4Protocol
 import com.zucham.qbsmarter.domain.driver.gan.ganEncryptorFor
+import com.zucham.qbsmarter.domain.driver.moyu.MoyuMhcProtocol
 import com.zucham.qbsmarter.domain.driver.moyu.MoyuWcuProtocol
 import com.zucham.qbsmarter.domain.driver.moyu.moyuWcuEncryptorFor
 
@@ -125,8 +126,9 @@ object CubeProtocolRegistry {
         ),
 
         // -- MoYu --------------------------------------------------------
-        // The V10/V11 AI family: encrypted with the same GAN-style
-        // AES-CBC scheme, over MoYu's own key material.
+        // Two unrelated protocols under one brand. WCU is the V10/V11
+        // family (encrypted, GAN-style AES); MHC is the older WeiLong AI
+        // (plaintext, entirely different framing).
         CubeProtocolSpec(
             id = "moyu-wcu",
             vendor = CubeVendor.MOYU,
@@ -136,6 +138,15 @@ object CubeProtocolRegistry {
             namePrefixes = listOf("WCU_MY"),
             createEncryptor = { moyuWcuEncryptorFor(it) },
             createProtocol = { MoyuWcuProtocol() },
+        ),
+        CubeProtocolSpec(
+            id = "moyu-mhc",
+            vendor = CubeVendor.MOYU,
+            serviceUuid = "00001000$BT_BASE",
+            commandCharUuid = "00001001$BT_BASE",
+            stateCharUuid = "00001003$BT_BASE",
+            namePrefixes = listOf("MHC"),
+            createProtocol = { MoyuMhcProtocol() },
         ),
     )
 
