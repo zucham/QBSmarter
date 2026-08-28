@@ -97,7 +97,9 @@ Beneath the cube is a row of action buttons:
 - **`Gyro`** - turns gyroscope-driven visualisation on or off (only shown while a cube that supports the feature is connected). Turning it off settles the cube back onto a straight-on view.
 - **`Reset state`** - returns the logical cube state to the solved position and generates a new scramble. This button is red because it overwrites all data about the current cube state and time measurement.
 
-Below the action row is a card with the scramble and a **`New`** button for generating a new scramble. Below that, in the lower part of the screen, is the timer and finally a quick overview of statistics (personal best, averages, total solve count, and so on).
+Below the action row is a card with the scramble and a **`New`** button for generating a new scramble. Below that, in the lower part of the screen, is the timer and finally a quick overview of statistics: fluency, Ao5 and Ao12 for
+the solve you just did, and your personal best, mean and best Ao5 for the profile.
+The total number of solves is shown next to the mean.
 
 ### Using the timer
 

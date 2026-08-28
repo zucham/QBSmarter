@@ -1512,6 +1512,14 @@ query would re-run on every configuration change. `SolveDetail.loaded`
 distinguishes "no moves recorded" from "moves not read yet", so the dialog never
 flashes the former at a user about to get the latter.
 
+**Quick overview.** `TotalSolvesStat` was removed as a tile and the count now
+rides on the mean tile via `SolveStat.labelSuffix` — a new optional hook that
+renders a small dimmed note beside a tile's label. The freed tile went to
+`BestAo5Stat`, so each column of the 3×2 grid pairs a rolling number with its
+all-time counterpart. A suffix rather than a second line because the grid gives
+every tile the same height and a wrapped value would make its whole row taller
+than the one above.
+
 ### SQLDelight single-column queries
 
 The generated shape of a one-column `SELECT` depends on whether that column can

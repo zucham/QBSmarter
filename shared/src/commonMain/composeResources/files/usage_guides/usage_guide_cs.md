@@ -97,7 +97,9 @@ Pod kostkou se nachází řada akčních tlačítek:
 - **`Gyro`** - zapne nebo vypne řízení vizualizace gyroskopem (zobrazuje se pouze při připojené kostce, která tuto funkci podporuje). Po vypnutí se kostka usadí zpět do přímého pohledu.
 - **`Resetovat stav`** - vrátí logický stav kostky do složené pozice a vygeneruje nové zamíchání. Toto tlačítko je červené, neboť přepíše veškerá data o aktuálním stavu kostky i měření času.
 
-Pod akční řadou se nachází karta se zamícháním (scramblem) a tlačítkem **`Nový`** pro generování nového zamíchání. Pod ní je v dolní části obrazovky časovač a nakonec rychlý přehled statistik (osobní rekord, průměry, počty složení atd.).
+Pod akční řadou se nachází karta se zamícháním (scramblem) a tlačítkem **`Nový`** pro generování nového zamíchání. Pod ní je v dolní části obrazovky časovač a nakonec rychlý přehled statistik: plynulost, Ao5 a Ao12 pro právě
+dokončené složení a osobní rekord, průměr a nejlepší Ao5 pro celý profil.
+Celkový počet složení je uveden vedle průměru.
 
 ### Používání časovače
 

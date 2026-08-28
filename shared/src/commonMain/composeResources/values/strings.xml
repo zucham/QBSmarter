@@ -42,11 +42,16 @@
     <string name="solve_pb_dismiss">Hooray!</string>
 
     <string name="stat_best">Personal best</string>
+    <string name="stat_best_ao5">Best Ao5</string>
     <string name="stat_mean">Mean</string>
     <string name="stat_ao5">Ao5</string>
     <string name="stat_ao12">Ao12</string>
     <string name="stat_fluency">Fluency (TPS)</string>
     <string name="stat_steps">Steps</string>
+    <!-- No longer has a tile of its own: the solve count now rides on the
+         mean tile as a label suffix (see MeanStat.labelSuffix). Kept, like
+         settings_sound, because the registry is designed to become
+         user-configurable and this is the label the tile would need back. -->
     <string name="stat_total">Total solves</string>
 
     <string name="devices_paired">Paired cubes</string>

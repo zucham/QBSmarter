@@ -3,10 +3,10 @@ package com.zucham.qbsmarter.ui.screens.solve.stats
 import com.zucham.qbsmarter.ui.screens.solve.stats.StatRegistry.Companion.DEFAULT
 import com.zucham.qbsmarter.ui.screens.solve.stats.builtin.Ao12Stat
 import com.zucham.qbsmarter.ui.screens.solve.stats.builtin.Ao5Stat
+import com.zucham.qbsmarter.ui.screens.solve.stats.builtin.BestAo5Stat
 import com.zucham.qbsmarter.ui.screens.solve.stats.builtin.FastestStat
 import com.zucham.qbsmarter.ui.screens.solve.stats.builtin.FluencyStat
 import com.zucham.qbsmarter.ui.screens.solve.stats.builtin.MeanStat
-import com.zucham.qbsmarter.ui.screens.solve.stats.builtin.TotalSolvesStat
 
 /**
  * Stat registry. New stat = one class + one entry in [DEFAULT].
@@ -18,15 +18,24 @@ class StatRegistry(initial: List<SolveStat> = DEFAULT) {
 
     companion object {
         /**
-         * Default order for stat tiles. Layout-wise we have a 3-column
-         * grid; with `StepTimesStat` filtered out (always returns null
-         * until step detection lands) we render 6 visible tiles = 2 rows
-         * of 3. Best/Mean/Ao5/Ao12 cluster the time-based numbers; TPS
-         * and Total close out the second row.
+         * Default order for stat tiles: a 3-column grid, six visible
+         * tiles, two clean rows.
+         *
+         * Row 1 is the solve you just did — turn rate, and the two
+         * rolling averages it moved. Row 2 is the profile: best single,
+         * mean, best Ao5. Reading down a column therefore pairs each
+         * rolling number with its all-time counterpart, which is the
+         * comparison a solver is actually making.
+         *
+         * `TotalSolvesStat` was removed rather than pushed onto a third
+         * row of one. The count now rides on the mean tile as a label
+         * suffix (see `MeanStat.labelSuffix`) — it is a caption for the
+         * mean more than a statistic in its own right, and the tile it
+         * freed went to the best Ao5, which had nowhere else to go.
          */
         val DEFAULT: List<SolveStat> = listOf(
             FluencyStat(), Ao5Stat(), Ao12Stat(),
-            FastestStat(), MeanStat(), TotalSolvesStat(),
+            FastestStat(), MeanStat(), BestAo5Stat(),
         )
     }
 }

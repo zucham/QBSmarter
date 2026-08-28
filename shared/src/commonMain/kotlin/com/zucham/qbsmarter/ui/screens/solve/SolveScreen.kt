@@ -58,6 +58,7 @@ import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -68,6 +69,7 @@ import com.zucham.qbsmarter.ui.components.DialogButton
 import com.zucham.qbsmarter.ui.components.DialogButtonEmphasis
 import com.zucham.qbsmarter.ui.components.suppressDrawerGesturesWhileTouched
 import com.zucham.qbsmarter.ui.screens.solve.stats.SolveSession
+import com.zucham.qbsmarter.ui.screens.solve.stats.SolveStat
 import com.zucham.qbsmarter.ui.screens.solve.stats.StatRegistry
 import com.zucham.qbsmarter.util.formatDuration
 import com.zucham.qbsmarter.ui.theme.ConnectionDotSize
@@ -1166,6 +1168,18 @@ private fun tintedContainerBackground(): Color = lerp(
     0.45f,
 )
 
+/**
+ * One resolved tile: the stat, its computed value, and the optional note
+ * that rides beside its label. Bundled rather than passed as a triple so
+ * the `remember` block above recomputes all three together — a value and
+ * a suffix from different frames would be a tile describing two moments.
+ */
+private data class StatTileData(
+    val stat: SolveStat,
+    val value: String,
+    val labelSuffix: String?,
+)
+
 @Composable
 private fun StatGrid(
     history: List<SolveRow>,
@@ -1175,7 +1189,9 @@ private fun StatGrid(
 ) {
     val items = remember(history, session) {
         statRegistry.all.mapNotNull { stat ->
-            stat.compute(history, session)?.let { stat to it }
+            stat.compute(history, session)?.let { value ->
+                StatTileData(stat, value, stat.labelSuffix(history, session))
+            }
         }
     }
     // Pre-blend tinted surface – see the matching comment in ScrambleCard
@@ -1202,15 +1218,19 @@ private fun StatGrid(
             verticalArrangement = Arrangement.spacedBy(8.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            items(items) { (stat, value) ->
-                StatTile(label = stringResource(stat.label), value = value)
+            items(items) { item ->
+                StatTile(
+                    label = stringResource(item.stat.label),
+                    value = item.value,
+                    labelSuffix = item.labelSuffix,
+                )
             }
         }
     }
 }
 
 @Composable
-private fun StatTile(label: String, value: String) {
+private fun StatTile(label: String, value: String, labelSuffix: String? = null) {
     // The outer StatGrid's container is a 0.45-lerp from surface
     // toward surfaceVariant (see [tintedContainerBackground]). The
     // tile fill needs to step distinctly off that container in BOTH
@@ -1237,12 +1257,32 @@ private fun StatTile(label: String, value: String) {
             )
             .padding(horizontal = 6.dp, vertical = 4.dp),
     ) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1,
-        )
+        // The label and its optional note share one line. The label
+        // takes `weight(fill = false)` so it claims only the width it
+        // needs and yields the rest to the note, and ellipsises rather
+        // than pushing the note off the tile — at a third of the screen
+        // width, a long label ("Personal best") plus a note is exactly
+        // the case that would otherwise clip silently.
+        Row(verticalAlignment = Alignment.Bottom) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false),
+            )
+            if (labelSuffix != null) {
+                Text(
+                    text = " · $labelSuffix",
+                    style = MaterialTheme.typography.labelSmall,
+                    // Dimmer than the label: it is a caption on a
+                    // caption, and must not compete with the value.
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                    maxLines = 1,
+                )
+            }
+        }
         Text(
             text = value,
             fontWeight = FontWeight.SemiBold,

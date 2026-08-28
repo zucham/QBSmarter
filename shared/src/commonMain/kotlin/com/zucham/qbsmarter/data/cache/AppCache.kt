@@ -30,6 +30,7 @@ import kotlinx.coroutines.flow.stateIn
  *   • the recent-100 solves for stats
  *   • full solve count for the active profile
  *   • best (effective) duration for the active profile
+ *   • best Ao5 for the active profile
  *   • settings map for the active profile (always observed – see [settings])
  *
  * **Why this layer exists.** Every screen that reads any of the above used
@@ -111,6 +112,29 @@ class AppCache(
             // so we always go to the DB rather than min'ing the list.
             val uid = activeProfile.idSnapshot() ?: return@map null
             solvesRepo.bestDuration(uid)
+        }.stateIn(scope, SharingStarted.Eagerly, null)
+
+    /**
+     * Best (lowest) Ao5 for the active profile, or null when the profile
+     * has no five-solve window yet.
+     *
+     * Recomputed alongside [bestDurationMs] and for the same reason: the
+     * recent-solves list is bounded at 100 rows and a profile's best Ao5
+     * is very often older than that. Like the best single it is an index
+     * seek (the partial `solves_user_ao5` covering index) rather than a
+     * scan, so re-reading it on every profile switch and every new solve
+     * costs a few microseconds regardless of history size.
+     *
+     * Emits null when caching is disabled; callers that need the value
+     * regardless fall through to the repository, which is exactly what
+     * [com.zucham.qbsmarter.ui.screens.solve.SolveViewModel] does when
+     * deciding whether a solve set a record.
+     */
+    val bestAo5Ms: StateFlow<Long?> =
+        recentSolves.map { _ ->
+            if (!_enabled.value) return@map null
+            val uid = activeProfile.idSnapshot() ?: return@map null
+            solvesRepo.bestAo5(uid)
         }.stateIn(scope, SharingStarted.Eagerly, null)
 
     /**

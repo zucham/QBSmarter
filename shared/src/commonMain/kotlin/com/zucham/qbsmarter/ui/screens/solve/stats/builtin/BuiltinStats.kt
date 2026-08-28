@@ -9,9 +9,9 @@ import qbsmarter.shared.generated.resources.Res
 import qbsmarter.shared.generated.resources.stat_ao12
 import qbsmarter.shared.generated.resources.stat_ao5
 import qbsmarter.shared.generated.resources.stat_best
+import qbsmarter.shared.generated.resources.stat_best_ao5
 import qbsmarter.shared.generated.resources.stat_fluency
 import qbsmarter.shared.generated.resources.stat_mean
-import qbsmarter.shared.generated.resources.stat_total
 
 /**
  * All-time fastest solve. Sourced from [SolveSession.bestDurationMs],
@@ -59,6 +59,20 @@ class MeanStat : SolveStat {
         if (times.isEmpty()) return null
         return formatDuration(times.average().toLong())
     }
+
+    /**
+     * The profile's all-time solve count, shown beside the label.
+     *
+     * It used to have a tile of its own. Folding it in here costs nothing
+     * — a mean and the number of solves it is a mean *of* are one thought,
+     * and the tile it vacated now holds the best Ao5 — but note the two
+     * numbers do not describe the same set: the mean is over the recent
+     * window the stat grid receives, the count is the whole history. That
+     * is the pre-existing behaviour of both, kept deliberately rather
+     * than quietly changed while moving them together.
+     */
+    override fun labelSuffix(history: List<SolveRow>, current: SolveSession): String? =
+        if (current.totalSolves <= 0L) null else current.totalSolves.toString()
 }
 
 /**
@@ -133,18 +147,27 @@ class FluencyStat : SolveStat {
 
 
 /**
- * All-time solve count for the active profile. Sourced from
- * [SolveSession.totalSolves], which the VM populates from the cache –
- * the recent-100 [history] list is not enough because a profile may have
- * thousands of older solves that are no longer in the in-memory window.
+ * Best Ao5 the profile has ever recorded — the Ao5 counterpart to
+ * [FastestStat], and the value the Ao5 record celebration is measured
+ * against.
  *
- * Returns null when the count is zero so a fresh profile doesn't show
- * a "Total: 0" tile (the "this stat doesn't apply yet" convention used
- * by Ao5/Ao12).
+ * Sourced from [SolveSession.bestAo5Ms] (the cache's indexed
+ * `MIN(ao5_ms)`), not from [history]. The window is the most recent 100
+ * solves and a best Ao5 is very often older than that, so computing it
+ * here would silently show a "best" that is merely the best *lately* —
+ * and would disagree with the record popup, which reads the real one.
+ *
+ * The fall-back to the window exists only for caching-disabled mode, and
+ * is honest rather than correct: it is the best Ao5 still in memory. Null
+ * before the profile has five solves, which hides the tile.
  */
-class TotalSolvesStat : SolveStat {
-    override val id = "total"
-    override val label = Res.string.stat_total
-    override fun compute(history: List<SolveRow>, current: SolveSession): String? =
-        if (current.totalSolves <= 0L) null else current.totalSolves.toString()
+class BestAo5Stat : SolveStat {
+    override val id = "bestAo5"
+    override val label = Res.string.stat_best_ao5
+    override fun compute(history: List<SolveRow>, current: SolveSession): String? {
+        val best = current.bestAo5Ms
+            ?: history.mapNotNull { it.ao5Ms }.minOrNull()
+            ?: return null
+        return formatDuration(best)
+    }
 }

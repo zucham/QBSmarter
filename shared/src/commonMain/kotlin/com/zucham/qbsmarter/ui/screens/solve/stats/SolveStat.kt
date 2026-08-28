@@ -15,15 +15,29 @@ interface SolveStat {
     val id: String
     val label: StringResource
     fun compute(history: List<SolveRow>, current: SolveSession): String?
+
+    /**
+     * Optional trailing note rendered next to [label], small and dimmed.
+     *
+     * Exists so a tile can carry a second number without taking a second
+     * line. The grid gives every tile the same height, and a value that
+     * wrapped would make its whole row taller than the one above it; the
+     * label has room to spare. `MeanStat` uses it for the solve count —
+     * "Mean · 482" reads as one fact about a body of solves, which is
+     * what it is, and frees the tile that used to hold the count alone.
+     *
+     * Null (the default) renders the label unchanged.
+     */
+    fun labelSuffix(history: List<SolveRow>, current: SolveSession): String? = null
 }
 
 /**
  * Live-solve snapshot passed to stats while a solve is in flight.
  *
  * [totalSolves] is the count of all persisted solves for the active
- * profile. Stats that are about cumulative progress (e.g. TotalSolvesStat)
- * read this; per-solve stats ignore it. Sourced from the cache so it's
- * O(1) to read at every frame the stat grid recomposes.
+ * profile. Read by [SolveStat.labelSuffix] on the mean tile; per-solve
+ * stats ignore it. Sourced from the cache so it's O(1) to read at every
+ * frame the stat grid recomposes.
  *
  * [bestDurationMs] is the all-time best (effective time, DNFs excluded)
  * for the active profile. Sourced from the cache, which is fed by an
@@ -43,4 +57,11 @@ data class SolveSession(
     val moveCount: Int,
     val totalSolves: Long = 0L,
     val bestDurationMs: Long? = null,
+    /**
+     * All-time best Ao5 for the active profile, from the cache's
+     * `bestAo5Ms`. Same reasoning as [bestDurationMs]: the recent-solves
+     * window cannot see far enough back to find it, and the running
+     * solve is never mixed in.
+     */
+    val bestAo5Ms: Long? = null,
 )

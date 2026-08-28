@@ -977,6 +977,7 @@ class SolveViewModel(
         durationMs = elapsedMs.value,
         moveCount = moveCount.value,
         totalSolves = totalSolveCount.value,
+        bestAo5Ms = cache.bestAo5Ms.value,
         // Persisted all-time best (effective time, DNFs excluded). Read
         // straight from the cache's StateFlow, which is fed by an
         // indexed MIN(...) SQL query on the active profile and updates

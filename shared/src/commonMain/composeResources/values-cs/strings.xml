@@ -33,6 +33,7 @@
     <string name="solve_pb_message">Právě jste překonali svůj osobní rekord pro tento profil!</string>
     <string name="solve_pb_dismiss">Hurá!</string>
 
+    <string name="stat_best_ao5">Nejlepší Ao5</string>
     <string name="stat_best">Osobní rekord</string>
     <string name="stat_mean">Průměr</string>
     <string name="stat_ao5">Ao5</string>
