@@ -2,6 +2,7 @@ package com.zucham.qbsmarter.domain.driver.protocol
 
 import com.zucham.qbsmarter.domain.driver.CubeEncryptor
 import com.zucham.qbsmarter.domain.driver.CubeVendor
+import com.zucham.qbsmarter.domain.driver.gan.GanGen1Protocol
 import com.zucham.qbsmarter.domain.driver.gan.GanGen2Protocol
 import com.zucham.qbsmarter.domain.driver.gan.GanGen3Protocol
 import com.zucham.qbsmarter.domain.driver.gan.GanGen4Protocol
@@ -9,6 +10,8 @@ import com.zucham.qbsmarter.domain.driver.gan.ganEncryptorFor
 import com.zucham.qbsmarter.domain.driver.moyu.MoyuMhcProtocol
 import com.zucham.qbsmarter.domain.driver.moyu.MoyuWcuProtocol
 import com.zucham.qbsmarter.domain.driver.moyu.moyuWcuEncryptorFor
+import com.zucham.qbsmarter.domain.driver.qiyi.QiyiProtocol
+import com.zucham.qbsmarter.domain.driver.qiyi.qiyiEncryptor
 
 /**
  * One row per smart-cube wire protocol. This table is the whole of the
@@ -147,6 +150,35 @@ object CubeProtocolRegistry {
             stateCharUuid = "00001003$BT_BASE",
             namePrefixes = listOf("MHC"),
             createProtocol = { MoyuMhcProtocol() },
+        ),
+
+        // -- QiYi --------------------------------------------------------
+        // Shares service 0000fff0 with GAN Gen1, so both carry name
+        // prefixes and `matches` requires a name hit for either to win.
+        CubeProtocolSpec(
+            id = "qiyi",
+            vendor = CubeVendor.QIYI,
+            serviceUuid = "0000fff0$BT_BASE",
+            commandCharUuid = "0000fff6$BT_BASE",
+            stateCharUuid = "0000fff6$BT_BASE",
+            namePrefixes = listOf("QY-QYSC", "XMD-TornadoV4-i"),
+            createEncryptor = { qiyiEncryptor() },
+            createProtocol = { QiyiProtocol(it) },
+        ),
+
+        // -- GAN Gen1 ----------------------------------------------------
+        // Registered but not drivable: see [unsupported]. Last in the
+        // list so it never shadows QiYi on the shared service.
+        CubeProtocolSpec(
+            id = "gan-gen1",
+            vendor = CubeVendor.GAN,
+            serviceUuid = "0000fff0$BT_BASE",
+            commandCharUuid = "0000fff5$BT_BASE",
+            stateCharUuid = "0000fff5$BT_BASE",
+            namePrefixes = listOf("GAN", "Gan"),
+            requiresExtraServiceUuid = "0000180a$BT_BASE",
+            createProtocol = { GanGen1Protocol() },
+            supported = false,
         ),
     )
 
