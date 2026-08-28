@@ -26,6 +26,8 @@ This document captures everything a developer should know to work on QBSmarter p
 7. [Cross-cutting concerns](#cross-cutting-concerns)
 8. [GAN Gen2 protocol notes](#gan-gen2-protocol-notes)
 9. [Database schema](#database-schema)
+   - [Per-profile cube names](#per-profile-cube-names)
+   - [Migrations](#migrations)
 10. [Permissions, edge-to-edge & system bars](#permissions-edge-to-edge--system-bars)
 11. [Internationalisation](#internationalisation)
 12. [Theming](#theming)
@@ -558,7 +560,7 @@ If the cube timestamps are degenerate (`first == last`) or non-monotonic (`last 
 
 ### Database & repositories
 
-**Schema files:** `shared/src/commonMain/sqldelight/com/zucham/qbsmarter/db/{Users, AppState, Cubes, Solves, Settings}.sq`.
+**Schema files:** `shared/src/commonMain/sqldelight/com/zucham/qbsmarter/db/{Users, AppState, Cubes, CubeNames, Solves, Settings}.sq`, plus the `.sqm` migration files in the same directory (see *Migrations*). The `.sq` files always describe the *current* schema; each `.sqm` is a delta applied to installs that are behind, and `Schema.version` is the highest migration number plus one.
 
 **Repository files:** `data/db/{UserRepository, DevicesRepository, SolvesRepository, SettingsRepository, Database}.kt`.
 
@@ -892,7 +894,9 @@ Two entry points, one dialog. The pencil beside the name in the paired list and 
 
 The pencil is deliberately below the 48 dp Material touch minimum (32 dp button, 18 dp glyph). It sits inline with the name, and a full-size target would push the name's baseline around and compete with Connect/Forget for the row's attention. The info dialog — one tap away, with a full-size Edit button — is the accessible route to the same action.
 
-Persistence is `DevicesRepository.rename(id, name)` → `cubes.renameById`. A blank name is stored as NULL, not `""`: the two render identically (both fall back to "Unknown") but only NULL lets the cube's advertised name fill the row back in on the next connect, so "clear the field" reads as "go back to the default name". This is the counterpart to the fill-only `name` clause in `cubes.upsert` — see *Database schema*. No BLE work is involved; the name lives only in our database, so renaming is safe on a connected cube and takes effect immediately because the paired list observes the table.
+Persistence is `DevicesRepository.rename(userId, mac, name)` → a row in `cube_names`, **scoped to one profile**. A blank name deletes the row rather than storing `""`: "no name of my own" is the absence of a row, so the cube goes back to showing whatever it advertises, which is the only sensible reading of clearing the field. See *Per-profile cube names* under *Database schema* for why the name doesn't live on the `cubes` row. No BLE work is involved; the name lives only in our database, so renaming is safe on a connected cube and takes effect immediately because the paired list observes both tables.
+
+The call site passes `cube.userId` rather than re-reading the active profile: the row came out of the paired list, which is queried for the active profile, so its `userId` *is* the active profile — carrying it along removes a nullable lookup that could only ever disagree with the row the user is looking at.
 
 ##### Per-row connect feedback
 
@@ -1331,11 +1335,11 @@ The quaternion encoding has a known firmware quirk where the official implementa
 ## Database schema
 
 ```
-users                       app_state                cubes                     solves                       settings
-─────                       ─────────                ─────                     ──────                       ────────
-id PK                       id PK (=0)               id PK                     id PK AUTOINCREMENT          (user_id, key) PK
-display_name                active_user_id ─→ users  mac UNIQUE                user_id ─→ users (CASCADE)   value
-created_at                                           name                      solved_at
+users                       app_state                cubes                     solves                       settings          cube_names
+─────                       ─────────                ─────                     ──────                       ────────          ──────────
+id PK                       id PK (=0)               id PK                     id PK AUTOINCREMENT          (user_id, key) PK (user_id, mac) PK
+display_name                active_user_id ─→ users  mac UNIQUE                user_id ─→ users (CASCADE)   value             name NOT NULL
+created_at                                           name (advertised)         solved_at
                                                      last_seen                 duration_ms
                                                      user_id ─→ users          scramble
                                                      hw_version                ao5_ms
@@ -1349,12 +1353,42 @@ created_at                                           name                      s
 - `app_state` is a single-row pattern: PK is constant 0 (`CHECK (id = 0)`), so it can hold at most one row. `INSERT OR IGNORE` bootstraps; `UPDATE` mutates.
 - All three child tables (`cubes`, `solves`, `settings`) reference `users(id) ON DELETE CASCADE`. `app_state.active_user_id` is `ON DELETE SET NULL`.
 - `cubes.upsert` updates `user_id` on conflict – critical for multi-profile flows: a cube paired under profile A and re-paired under B must transfer ownership; otherwise `selectByUser(B)` won't return it and the cube is invisible in B's Paired list.
-- `cubes.upsert` sets `name = COALESCE(name, excluded.name)` — **fill-only**. The advertised BLE name is a fallback, not the truth: once a user renames a cube (`renameById`), a straight assignment would stamp the manufacturer's name back over it on the very next connect, so the rename would appear to survive only until reconnection. A NULL name is still fillable, so a cube first seen without one picks a name up later — which is why clearing the rename field means "go back to whatever the cube calls itself".
+- `cubes.name` is the name the cube **advertises** over BLE — hardware-level, shared by every profile. A user's own name for a cube lives in `cube_names`, keyed by profile. See *Per-profile cube names* below.
+- `cubes.upsert` sets `name = COALESCE(excluded.name, name)`: take the newly-advertised value whenever the cube reports one, keep the last one we saw when it doesn't. This clause used to be the other way round (fill-only, `COALESCE(name, excluded.name)`) because user renames lived in this column and every reconnect would otherwise have stamped the manufacturer's name back over them. With renames moved out to `cube_names`, the clause went back to meaning what it says.
 - `cubes.vendor` is the persisted form of `CubeVendor` (`'gan'` / `'moyu'`), `NOT NULL DEFAULT 'gan'`. Stamped by the orchestrator via `updateVendor(mac, vendor)` right after service-UUID-based detection, well before the INFO round-trip lands. The `'gan'` default covers the brief pre-detection window for newly-paired rows and any pre-feature exports (which deserialise as `vendor = "gan"` by default).
 - `solves` indexes: `(user_id, solved_at DESC)` and `(user_id, duration_ms ASC)`. Both used by the History sort modes.
 - `solves.bestDuration` returns `MIN(duration_ms + penalty_ms)` skipping DNFs. Aliased `AS best` so the generated row class has a stable Kotlin property name.
 - `solves.move_count` (default 0) is the total cube turns recorded during the solve. Already counted at runtime by `SolveViewModel` for the live TPS calculation (`fluency = moveCount * 1000 / durationMs`); persisting it lets the History detail dialog show "Turns: N" alongside the time. **Not consumed by any stat** – it's a History-only field by product spec. The 0 default keeps the column SQL-compatible with old call sites (e.g. tests that insert via the repo without the new arg) and lets the History dialog hide the row for pre-feature data via a `> 0` guard.
 - `settings` value is always TEXT; typed accessors in `SettingsRepository` parse to bool/int/string.
+
+### Per-profile cube names
+
+`cubes` is keyed by MAC — one row per *physical* cube — and `cubes.upsert` transfers `user_id` on re-pair rather than inserting a second row, so profile B pairing a cube profile A had paired takes over A's row. With the name on that row, A's rename travelled with it: rename your cube in one profile and it was renamed in all of them.
+
+`cube_names(user_id, mac, name)` splits the two apart. Hardware facts — `hw_version`, `sw_version`, `gyro_supported`, `vendor` — stay on the shared row, because they are true of the cube no matter who is holding it, and sharing them means a cube re-paired under a second profile keeps everything the app has learned about it. A name is not a fact about the hardware; it is one person's label, and two profiles on one phone are two people.
+
+Details worth keeping straight:
+
+- **Keyed by `(user_id, mac)`, not by `cubes.id`.** The MAC is the physical cube's identity and outlives the `cubes` row — forgetting and re-pairing mints a fresh id — so a name keyed by MAC is still the right name when the cube comes back, and survives the cube being borrowed by another profile and handed back.
+- **`name` is `NOT NULL`.** "This profile has no name of its own" is the absence of a row, not a row holding NULL. `DevicesRepository.rename` deletes the row for a blank name, which is what clearing the field means: go back to whatever the cube calls itself.
+- **`PairedCube` carries both.** `advertisedName` and `customName` are stored fields; `name` is a computed `customName ?: advertisedName`. Display code wants `name`. Anything handing a name **back to the BLE layer wants `advertisedName`** — `CubeIdentity.name` drives protocol resolution and the GAN key derivation, so `DevicesViewModel.reconnect` passing a user's label would have broken cube detection on reconnect. (It did, before the split: the display name was the only name there was.)
+- **One joined query.** `cubes.selectByUser` LEFT JOINs `cube_names` on `(user_id, mac)`. SQLDelight notifies a query when any table it reads is written, so a rename re-emits the paired list exactly like a pairing does, and the list is never assembled from a fresh cube row and a stale name map.
+- **Forget takes the name with it.** `DevicesRepository.forget` runs `cube_names.removeForCubeId` then `cubes.deleteById` in a transaction — in that order, because the name delete resolves the MAC and owner *through* the cube row.
+- **Export/import.** `ExportCube` gained an optional `customName` alongside `name` (which is now the advertised one). Import calls `rememberCube` for the hardware row and `rename` for the profile's label separately, so importing a bundle into profile B cannot rename a cube out from under profile A. Bundles predating the split put the rename in `name`; those import as an advertised name, which is the only reading available without a second field to compare against. The envelope is unchanged otherwise, so `EXPORT_SCHEMA_VERSION` stays at 1 — same additive trick as `vendor`.
+
+#### Migrations
+
+The `.sq` files always describe the *current* schema. Each `.sqm` is a delta applied to installs that are behind, and `QbsmarterDatabase.Schema.version` is the highest migration number plus one — so a fresh install is created straight from the `.sq` files at that version and runs no migration at all.
+
+**One change per file, and a shipped file is frozen.** The version a device reports is decided by the *set* of migration files, not by what is inside them. A device is therefore stamped with the version of the build it installed and will never run those files again — so extending a migration that has already reached a device strands it silently: it sits at the version the extended file produces, and nothing will ever apply the part that was added afterwards. Every schema change gets its own file for that reason, and no file is edited once it has shipped.
+
+| file | version | what it does |
+|---|---|---|
+| `1.sqm` | 1 → 2 | creates `cube_names` and copies each existing `cubes.name` across as a per-profile override |
+
+**`1.sqm`.** Creates `cube_names` and carries every existing `cubes.name` across as an override belonging to the profile that currently owns the cube: whoever renamed a cube keeps seeing their name, nobody else inherits it. Cubes whose owning profile no longer exists are skipped — there is no profile for the name to belong to, and filtering here rather than relying on a cleanup elsewhere keeps this file correct under foreign-key enforcement on its own, which matters for a file that will still be run years after it was written.
+
+`cubes.name` is deliberately **not** cleared. Post-migration it means "the advertised name", and for a renamed cube it briefly holds the user's label instead — harmless, because the owning profile now reads its name from `cube_names`, and the next connect overwrites the column with the real advertised name. Clearing it would be worse: it would blank the fallback name for every cube never connected again.
 
 ### Setting keys
 

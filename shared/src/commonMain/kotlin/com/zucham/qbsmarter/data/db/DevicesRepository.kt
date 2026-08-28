@@ -2,7 +2,6 @@ package com.zucham.qbsmarter.data.db
 
 import app.cash.sqldelight.coroutines.asFlow
 import app.cash.sqldelight.coroutines.mapToList
-import com.zucham.qbsmarter.db.Cubes
 import com.zucham.qbsmarter.db.QbsmarterDatabase
 import com.zucham.qbsmarter.domain.driver.CubeVendor
 import com.zucham.qbsmarter.util.currentTimeMillis
@@ -11,13 +10,24 @@ import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.map
 
 /**
  * Persisted paired-cube model. The hardware-info fields ([hwVersion],
  * [swVersion], [gyroSupported]) are nullable because they're populated only
  * after the cube's INFO round-trip completes. Pre-pairing or for a non-GAN
  * cube, they stay null.
+ *
+ * **Two names.** [advertisedName] is what the cube calls itself over BLE —
+ * a property of the hardware, shared by every profile that pairs it.
+ * [customName] is *this profile's* override, or null if it has none.
+ * [name] resolves the two for display. The split is what keeps a rename
+ * made in one profile out of every other profile's list; see CubeNames.sq
+ * for the full reasoning.
+ *
+ * Code that needs a name to show the user wants [name]. Code that hands a
+ * name back to the BLE layer wants [advertisedName] — protocol resolution
+ * and the GAN key derivation both read the advertised name, and feeding
+ * them a user's label would break cube detection on reconnect.
  *
  * [vendor] is the detected manufacturer-protocol family for this cube
  * (see [CubeVendor]). Populated by the connection orchestrator as soon
@@ -31,58 +41,53 @@ import kotlinx.coroutines.flow.map
 data class PairedCube(
     val id: String,
     val mac: String,
-    val name: String?,
+    val advertisedName: String?,
+    val customName: String?,
     val lastSeen: Long,
     val userId: String,
     val hwVersion: String?,
     val swVersion: String?,
     val gyroSupported: Boolean?,
     val vendor: CubeVendor,
-)
-
-private fun Cubes.toModel() = PairedCube(
-    id = id,
-    mac = mac,
-    name = name,
-    lastSeen = last_seen,
-    userId = user_id,
-    hwVersion = hw_version,
-    swVersion = sw_version,
-    gyroSupported = gyro_supported?.let { it != 0L },
-    vendor = CubeVendor.fromKey(vendor),
-)
+) {
+    /**
+     * The name to show for this cube in this profile: the profile's own
+     * override if it has one, otherwise whatever the cube advertises.
+     * Null only when neither exists, which the UI renders as "Unknown".
+     */
+    val name: String? get() = customName ?: advertisedName
+}
 
 class DevicesRepository(
     private val db: QbsmarterDatabase,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.Default,
 ) {
+    /**
+     * The profile's paired cubes, each already carrying that profile's
+     * name override. Backed by one joined query, so a rename re-emits
+     * this flow exactly like a pairing does.
+     */
     fun observeForUser(userId: String): Flow<List<PairedCube>> =
-        db.cubesQueries.selectByUser(userId)
-            .asFlow().mapToList(ioDispatcher).map { it.map(Cubes::toModel) }
+        pairedCubesQuery(userId).asFlow().mapToList(ioDispatcher)
             .distinctUntilChanged()
 
-    fun byId(id: String): PairedCube? =
-        db.cubesQueries.selectById(id).executeAsOneOrNull()?.toModel()
-
-    fun byMac(mac: String): PairedCube? =
-        db.cubesQueries.selectByMac(mac).executeAsOneOrNull()?.toModel()
-
-    /** Insert-or-refresh by MAC; original UUID preserved on conflict. */
-    fun rememberCube(userId: String, mac: String, name: String?): PairedCube {
-        val existing = db.cubesQueries.selectByMac(mac).executeAsOneOrNull()
-        val now = currentTimeMillis()
-        val id = existing?.id ?: generateUuid()
-        db.cubesQueries.upsert(id, mac, name ?: existing?.name, now, userId)
-        return byMac(mac) ?: PairedCube(
-            id = id, mac = mac, name = name ?: existing?.name,
-            lastSeen = now, userId = userId,
-            hwVersion = existing?.hw_version, swVersion = existing?.sw_version,
-            gyroSupported = existing?.gyro_supported?.let { it != 0L },
-            // New rows take the schema default (GAN). Existing rows carry
-            // whatever was previously stamped, which the orchestrator may
-            // immediately overwrite via [updateVendor] once service
-            // discovery confirms the vendor.
-            vendor = CubeVendor.fromKey(existing?.vendor),
+    /**
+     * Insert-or-refresh by MAC; the original UUID is preserved on
+     * conflict, so anything holding an id stays valid across re-pairs.
+     *
+     * [advertisedName] is the name the cube reports over BLE. It is
+     * stored on the shared `cubes` row and does not touch any profile's
+     * rename — passing null (a cube that advertised no name this time)
+     * leaves the last one we saw in place.
+     */
+    fun rememberCube(userId: String, mac: String, advertisedName: String?) {
+        val existingId = db.cubesQueries.selectByMac(mac).executeAsOneOrNull()?.id
+        db.cubesQueries.upsert(
+            id = existingId ?: generateUuid(),
+            mac = mac,
+            name = advertisedName,
+            lastSeen = currentTimeMillis(),
+            userId = userId,
         )
     }
 
@@ -133,31 +138,82 @@ class DevicesRepository(
     }
 
     /**
-     * Give a paired cube a user-chosen display name.
+     * Give a cube a name **for one profile**. Other profiles that pair
+     * the same physical cube are unaffected — the override is stored
+     * against (userId, mac) in `cube_names`, never on the shared `cubes`
+     * row.
      *
-     * Trimmed, and a blank name is stored as NULL rather than as an
-     * empty string — the two would render identically (both fall back to
-     * "Unknown" in the list) but only NULL lets the cube's advertised
-     * name fill the row back in on the next connect. So "clear the
-     * field" reads as "go back to the default name", which is the only
-     * sensible meaning it can have.
+     * A blank name removes the override rather than storing an empty
+     * string: "no name of my own" is the absence of a row, so the cube
+     * goes back to showing whatever it advertises. That is the only
+     * sensible reading of clearing the field, and it keeps one state
+     * from having two representations.
      *
-     * The name set here survives reconnects: the `upsert` query fills a
-     * row's name in only when it has none, so [rememberCube] can no
-     * longer stamp the manufacturer's advertised name back over it.
+     * No BLE work is involved and the name is not sent to the cube, so
+     * this is safe while connected and takes effect immediately.
      */
-    fun rename(id: String, name: String?) {
-        db.cubesQueries.renameById(name = name?.trim()?.takeIf { it.isNotEmpty() }, id = id)
+    fun rename(userId: String, mac: String, name: String?) {
+        val trimmed = name?.trim()?.takeIf { it.isNotEmpty() }
+        if (trimmed == null) db.cubeNamesQueries.remove(userId = userId, mac = mac)
+        else db.cubeNamesQueries.put(userId = userId, mac = mac, name = trimmed)
     }
 
-    fun forget(id: String) = db.cubesQueries.deleteById(id)
+    /**
+     * Forget a paired cube, taking the owning profile's name override
+     * with it. Forgetting is the user saying they're done with this
+     * cube; leaving their label behind to resurface if they ever pair it
+     * again would be a small haunting.
+     *
+     * Ordering matters and is why this is a transaction: the name delete
+     * looks the MAC and owner up *through* the cube row, so it has to run
+     * first.
+     */
+    fun forget(id: String) {
+        db.transaction {
+            db.cubeNamesQueries.removeForCubeId(id)
+            db.cubesQueries.deleteById(id)
+        }
+    }
 
-    /** Snapshot all paired cubes for the user – used by export. */
+    /**
+     * Snapshot all paired cubes for the user – used by export. Carries
+     * the same per-profile names [observeForUser] does.
+     */
     fun snapshotAllForUser(userId: String): List<PairedCube> =
-        db.cubesQueries.selectByUser(userId).executeAsList().map(Cubes::toModel)
+        pairedCubesQuery(userId).executeAsList()
 
     /** Wipe all cubes for a profile. Used when overwriting via import. */
     fun deleteAllForUser(userId: String) {
-        db.cubesQueries.deleteAllForUser(userId)
+        db.transaction {
+            db.cubeNamesQueries.deleteAllForUser(userId)
+            db.cubesQueries.deleteAllForUser(userId)
+        }
     }
+
+    /**
+     * The one place the joined row is turned into a [PairedCube], shared
+     * by the reactive and snapshot readers so they can't drift apart.
+     *
+     * Written against the generated *mapper* overload rather than the
+     * generated row class: the projection is columns-plus-one-join, and
+     * naming its result type here would tie this file to a detail of how
+     * SQLDelight names such classes for no benefit.
+     */
+    private fun pairedCubesQuery(userId: String) =
+        db.cubesQueries.selectByUser(userId) {
+            id, mac, name, lastSeen, rowUserId, hwVersion, swVersion,
+            gyroSupported, vendor, customName ->
+            PairedCube(
+                id = id,
+                mac = mac,
+                advertisedName = name,
+                customName = customName,
+                lastSeen = lastSeen,
+                userId = rowUserId,
+                hwVersion = hwVersion,
+                swVersion = swVersion,
+                gyroSupported = gyroSupported?.let { it != 0L },
+                vendor = CubeVendor.fromKey(vendor),
+            )
+        }
 }

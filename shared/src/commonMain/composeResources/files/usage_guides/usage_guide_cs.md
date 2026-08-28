@@ -128,7 +128,7 @@ U každé spárované kostky najdete tato tlačítka:
 
 - **`Připojit`** / **`Odpojit`** - připojí nebo odpojí kostku. V průběhu připojování se na tomto tlačítku zobrazuje načítání. Naráz může být připojena pouze jedna kostka - nové připojení automaticky odpojí předchozí.
 - **`Info`** - otevře dialog s podrobnostmi o kostce: MAC adresa, verze hardwaru, verze softwaru, podpora gyroskopu a aktuální stav baterie. Dialog obsahuje také tlačítko **`Upravit`** pro přejmenování kostky.
-- **ikona tužky** (vedle názvu kostky) - přejmenuje kostku. Ponecháte-li pole prázdné a uložíte, vrátí se název, který o sobě hlásí samotná kostka.
+- **ikona tužky** (vedle názvu kostky) - přejmenuje kostku. Ponecháte-li pole prázdné a uložíte, vrátí se název, který o sobě hlásí samotná kostka. Zvolený název patří profilu, který právě používáte - sdílíte-li telefon, ostatní profily si u téže kostky ponechají svůj vlastní název.
 - **`Zapomenout`** - odebere kostku ze seznamu spárovaných zařízení. Kostku lze samozřejmě v budoucnu znovu spárovat.
 
 V horní části obrazovky najdete různá kontextová tlačítka podle aktuálního stavu:

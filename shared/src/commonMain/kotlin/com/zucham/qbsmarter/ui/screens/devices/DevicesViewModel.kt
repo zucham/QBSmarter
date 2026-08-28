@@ -189,9 +189,18 @@ class DevicesViewModel(
         orchestrator.connect(device, uid)
     }
 
+    /**
+     * Reconnect to an already-paired cube.
+     *
+     * Deliberately [PairedCube.advertisedName], not the display name.
+     * The value handed over here becomes `CubeIdentity.name`, which
+     * protocol resolution matches against and which the GAN key
+     * derivation reads — a user's own label for the cube would fail both.
+     * The display name never leaves the UI layer.
+     */
     fun reconnect(cube: PairedCube) {
         val uid = activeProfile.idSnapshot() ?: return
-        orchestrator.connect(BleDevice(cube.name, cube.mac), uid)
+        orchestrator.connect(BleDevice(cube.advertisedName, cube.mac), uid)
     }
 
     /**
@@ -250,16 +259,22 @@ class DevicesViewModel(
     }
 
     /**
-     * Rename a paired cube. A blank name clears the user's override and
-     * lets the cube's own advertised name take over again — see
-     * [DevicesRepository.rename].
+     * Rename a paired cube, **for the current profile only**. A blank
+     * name clears this profile's override and lets the cube's own
+     * advertised name take over again — see [DevicesRepository.rename].
+     *
+     * Scoped by `cube.userId` rather than by a fresh `activeProfile`
+     * read: the row came out of the paired list, which is queried for
+     * the active profile, so its `userId` *is* the active profile and
+     * carrying it along removes a nullable lookup that could only ever
+     * disagree with the row the user is looking at.
      *
      * No connection work involved: the name lives only in our database,
      * so this is safe on a connected cube and takes effect immediately
      * (the paired list observes the table).
      */
     fun rename(cube: PairedCube, name: String) {
-        devicesRepo.rename(cube.id, name)
+        devicesRepo.rename(userId = cube.userId, mac = cube.mac, name = name)
     }
 
     fun disconnect() = orchestrator.disconnect()

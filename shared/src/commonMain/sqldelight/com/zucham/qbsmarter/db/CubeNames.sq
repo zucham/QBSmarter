@@ -1,0 +1,65 @@
+-- Per-profile display names for paired cubes.
+--
+-- A cube's row in `cubes` is keyed by MAC and holds exactly one record
+-- per *physical* cube: hardware versions, gyro capability, vendor. Those
+-- are facts about the hardware and are the same no matter who is holding
+-- it, so they are deliberately shared — a cube re-paired under a second
+-- profile keeps everything the app has learned about it.
+--
+-- A name is not a fact about the hardware. It is one person's label for
+-- their cube, and two profiles on the same phone are two people. Storing
+-- it on the `cubes` row meant profile A's rename followed the cube into
+-- profile B the moment B paired it (`cubes.upsert` transfers `user_id`
+-- but preserves the row, name included). This table separates the two:
+-- `cubes.name` is the name the cube advertises over BLE, and a row here
+-- is one profile's override of it.
+--
+-- Keyed by (user_id, mac) rather than by cubes.id on purpose. The MAC is
+-- the physical cube's identity and outlives the `cubes` row — forgetting
+-- and re-pairing a cube mints a fresh id — so a name keyed by MAC is
+-- still the right name when the same cube comes back. It also means a
+-- profile's name survives the cube being borrowed by another profile and
+-- handed back.
+--
+-- `name` is NOT NULL: "this profile has no name of its own for the cube"
+-- is the absence of a row, not a row holding NULL. One representation for
+-- one state.
+
+CREATE TABLE cube_names (
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    mac TEXT NOT NULL,
+    name TEXT NOT NULL,
+    PRIMARY KEY (user_id, mac)
+);
+
+-- No separate user_id index: the composite primary key already creates a
+-- unique index with user_id as its leading column, which is exactly what
+-- a "all names for this profile" lookup walks.
+
+-- No SELECT of its own. Reads always go through `cubes.selectByUser`,
+-- which LEFT JOINs this table, so the paired list and the names it shows
+-- can never be assembled from two reads taken a moment apart.
+
+put:
+INSERT INTO cube_names (user_id, mac, name) VALUES (:userId, :mac, :name)
+ON CONFLICT(user_id, mac) DO UPDATE SET name = excluded.name;
+
+-- Drop this profile's override. The cube then shows whatever name it
+-- advertises again, which is what clearing the rename field means.
+remove:
+DELETE FROM cube_names WHERE user_id = :userId AND mac = :mac;
+
+-- Drop the override belonging to the profile that currently owns the
+-- given cube row. Used when forgetting a cube: the caller has an id, and
+-- both the MAC and the owning profile hang off it.
+--
+-- Must run BEFORE `cubes.deleteById` — the subqueries read the row it
+-- deletes. `DevicesRepository.forget` wraps the pair in a transaction so
+-- the ordering can't be got wrong by accident.
+removeForCubeId:
+DELETE FROM cube_names
+WHERE mac = (SELECT mac FROM cubes WHERE id = :id)
+  AND user_id = (SELECT user_id FROM cubes WHERE id = :id);
+
+deleteAllForUser:
+DELETE FROM cube_names WHERE user_id = :userId;

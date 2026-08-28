@@ -1,0 +1,53 @@
+-- Schema v1 → v2: per-profile cube names.
+--
+-- Until v1 a cube's display name lived on the `cubes` row, which is
+-- keyed by MAC and therefore shared by every profile that pairs the same
+-- physical cube. Renaming a cube under one profile changed it for all of
+-- them. `cube_names` splits the user's label away from the hardware
+-- record; see CubeNames.sq for the reasoning.
+--
+-- This is the app's first migration file. The `.sq` files always describe
+-- the *current* schema; each `.sqm` is a delta applied to installs that
+-- are behind, and `QbsmarterDatabase.Schema.version` is the highest
+-- migration number plus one — so this file alone puts the schema at
+-- version 2. Installs created before it existed report user_version = 1
+-- and run it; fresh installs are created straight from the .sq files at
+-- the current version and never see it.
+--
+-- **One change per file, and a shipped file is frozen.** The version a
+-- device reports is decided by the *set* of migration files, not by what
+-- is inside them. Extending a file that has already reached a device
+-- strands that device silently: it is already stamped with the version
+-- the file produces, so it will never run the part that was added later.
+-- Every schema change since has its own `.sqm` for exactly that reason.
+
+CREATE TABLE cube_names (
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    mac TEXT NOT NULL,
+    name TEXT NOT NULL,
+    PRIMARY KEY (user_id, mac)
+);
+
+-- Carry every existing name across as an override belonging to the
+-- profile that currently owns the cube. Whoever renamed a cube keeps
+-- seeing their name; nobody else inherits it.
+--
+-- Cubes whose owning profile no longer exists are skipped. Those rows are
+-- the wreckage of profile deletions made while foreign keys were
+-- unenforced (swept in `2.sqm`), and there is no profile for the name to
+-- belong to. Filtering here rather than relying on a cleanup that runs
+-- later also makes this file correct under foreign-key enforcement on its
+-- own — which matters, because it will be run long after it was written,
+-- on databases that arrive at it by routes nobody has thought about yet.
+--
+-- `cubes.name` is left as it is rather than being cleared. Post-migration
+-- it means "the name the cube advertises", and for a renamed cube it
+-- briefly holds the user's label instead — harmless, because the owning
+-- profile now reads its name from cube_names, and the next connect
+-- overwrites the column with the real advertised name (`cubes.upsert`
+-- assigns it whenever the cube reports one). Clearing it here would be
+-- worse: it would blank the fallback name for every cube that is never
+-- connected again.
+INSERT INTO cube_names (user_id, mac, name)
+SELECT user_id, mac, name FROM cubes
+WHERE name IS NOT NULL AND user_id IN (SELECT id FROM users);

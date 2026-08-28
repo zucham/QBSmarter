@@ -353,7 +353,9 @@ class SettingsViewModel(
      *    will not collide because at minimum its `solvedAt`
      *    epoch-millisecond differs.
      *  - Cubes: rememberCube + updateHardwareInfo per row, mapped onto
-     *    the destination profile id.
+     *    the destination profile id. The per-profile name override is
+     *    applied separately (`rename`) so it lands on the destination
+     *    profile alone, never on the shared cube row.
      *  - DisplayName: imported value overwrites the local one ONLY if
      *    non-null (don't blank out a local name with an imported null).
      */
@@ -371,6 +373,17 @@ class SettingsViewModel(
             // Cubes: register each onto the local profile.
             for (cube in p.cubes) {
                 devicesRepo.rememberCube(targetId, cube.mac, cube.name)
+                // Restore the profile's own label separately from the
+                // hardware row, so importing a bundle into profile B
+                // can't rename the cube out from under profile A. A null
+                // here means the exporting profile had no override, and
+                // clearing rather than skipping is right: import is
+                // "make this profile look like the bundle".
+                devicesRepo.rename(
+                    userId = targetId,
+                    mac = cube.mac,
+                    name = cube.customName,
+                )
                 if (cube.hwVersion != null && cube.swVersion != null && cube.gyroSupported != null) {
                     devicesRepo.updateHardwareInfo(
                         mac = cube.mac,
@@ -456,7 +469,10 @@ class SettingsViewModel(
     )
 
     private fun toExportCube(cube: PairedCube) = ExportCube(
-        mac = cube.mac, name = cube.name, lastSeen = cube.lastSeen,
+        mac = cube.mac,
+        name = cube.advertisedName,
+        customName = cube.customName,
+        lastSeen = cube.lastSeen,
         hwVersion = cube.hwVersion, swVersion = cube.swVersion,
         gyroSupported = cube.gyroSupported,
         vendor = cube.vendor.key,
@@ -546,7 +562,24 @@ data class ExportSolve(
 @Serializable
 data class ExportCube(
     val mac: String,
+    /**
+     * The cube's advertised BLE name — hardware-level, the same for
+     * every profile. A profile's own label for the cube travels in
+     * [customName].
+     *
+     * Bundles produced before cube names were split per profile put the
+     * user's rename in this field, because at the time there was only
+     * one name. Those import as an advertised name, which is the only
+     * reading available without a second field to compare it against;
+     * the importing profile still sees the name it expects.
+     */
     val name: String?,
+    /**
+     * The importing profile's own name for this cube, or null if it
+     * never renamed it. Optional so pre-split bundles (which have no
+     * such field) parse unchanged — same additive trick as [vendor].
+     */
+    val customName: String? = null,
     val lastSeen: Long,
     val hwVersion: String?,
     val swVersion: String?,
