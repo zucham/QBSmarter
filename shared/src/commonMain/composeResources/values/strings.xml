@@ -113,7 +113,6 @@
     <string name="history_turns">Turns</string>
     <string name="history_cube">Cube</string>
     <string name="history_ao5_times">Ao5 times</string>
-    <string name="history_ao5_trimmed_hint">Bracketed times were dropped from the average.</string>
     <string name="history_moves">Moves</string>
     <string name="history_moves_none">No move data recorded for this solve.</string>
     <string name="history_swipe_hint">Delete a record by swiping it left</string>

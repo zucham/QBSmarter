@@ -62,7 +62,6 @@ import org.koin.compose.viewmodel.koinViewModel
 import qbsmarter.shared.generated.resources.Res
 import qbsmarter.shared.generated.resources.devices_cancel
 import qbsmarter.shared.generated.resources.history_ao5_times
-import qbsmarter.shared.generated.resources.history_ao5_trimmed_hint
 import qbsmarter.shared.generated.resources.history_close
 import qbsmarter.shared.generated.resources.history_cube
 import qbsmarter.shared.generated.resources.history_date
@@ -513,11 +512,6 @@ private fun SolveDetailDialog(
                         modifier = Modifier.padding(top = 8.dp),
                     )
                     Ao5TimesRow(encoded)
-                    Text(
-                        stringResource(Res.string.history_ao5_trimmed_hint),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
                 }
 
                 row.fluency?.let {

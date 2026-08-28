@@ -100,7 +100,6 @@
     <string name="history_scramble_label">Zamíchání:</string>
     <string name="history_cube">Kostka</string>
     <string name="history_ao5_times">Časy Ao5</string>
-    <string name="history_ao5_trimmed_hint">Časy v závorkách se do průměru nepočítají.</string>
     <string name="history_moves">Tahy</string>
     <string name="history_moves_none">Pro toto složení nejsou uloženy žádné tahy.</string>
     <string name="history_turns">Otáčky</string>

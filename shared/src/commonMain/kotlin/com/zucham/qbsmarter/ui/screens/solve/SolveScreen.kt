@@ -79,7 +79,6 @@ import org.jetbrains.compose.resources.stringResource
 import org.koin.compose.viewmodel.koinViewModel
 import qbsmarter.shared.generated.resources.Res
 import qbsmarter.shared.generated.resources.devices_connect
-import qbsmarter.shared.generated.resources.history_ao5_trimmed_hint
 import qbsmarter.shared.generated.resources.solve_connect_cube
 import qbsmarter.shared.generated.resources.solve_dnf
 import qbsmarter.shared.generated.resources.solve_idle
@@ -1388,12 +1387,6 @@ private fun PbDialog(event: PbEvent, onDismiss: () -> Unit) {
                     Ao5TimesRow(
                         encoded = times,
                         modifier = Modifier.padding(top = 6.dp),
-                    )
-                    Text(
-                        text = stringResource(Res.string.history_ao5_trimmed_hint),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(top = 2.dp),
                     )
                 }
                 Text(
