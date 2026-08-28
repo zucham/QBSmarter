@@ -28,6 +28,7 @@ This document captures everything a developer should know to work on QBSmarter p
 9. [Database schema](#database-schema)
    - [Per-profile cube names](#per-profile-cube-names)
    - [Migrations](#migrations)
+   - [Record queries and the ranking index](#record-queries-and-the-ranking-index)
    - [Ao5 as a maintained column](#ao5-as-a-maintained-column)
    - [Foreign keys](#foreign-keys)
 10. [Permissions, edge-to-edge & system bars](#permissions-edge-to-edge--system-bars)
@@ -589,7 +590,7 @@ A naive `observeActiveId().map { id -> selectById(id).executeAsOneOrNull() }` on
 
 #### `SolvesRepository`
 
-Effective solve time is `durationMs + penaltyMs` (excluding DNFs). DNF/+2 are stored separately so removing a +2 doesn't lose data. Stat queries (`bestDuration`, `pageByDurationAsc`) use the effective time and skip DNFs.
+Effective solve time is `durationMs + penaltyMs` (excluding DNFs). DNF/+2 are stored separately so removing a +2 doesn't lose data. Stat queries (`bestDuration`, `bestAo5`, `pageByDurationAsc`) use the effective time and skip DNFs.
 
 It also owns the derived `ao5_ms` / `ao5_times` columns — computed inside the insert transaction from the rows the database holds, and repaired after every penalty edit, delete and import (see *Ao5 as a maintained column*).
 
@@ -1366,7 +1367,7 @@ created_at                                           name (advertised)         s
 - `cubes.upsert` sets `name = COALESCE(excluded.name, name)`: take the newly-advertised value whenever the cube reports one, keep the last one we saw when it doesn't. This clause used to be the other way round (fill-only, `COALESCE(name, excluded.name)`) because user renames lived in this column and every reconnect would otherwise have stamped the manufacturer's name back over them. With renames moved out to `cube_names`, the clause went back to meaning what it says.
 - `cubes.vendor` is the persisted form of `CubeVendor` (`'gan'` / `'moyu'`), `NOT NULL DEFAULT 'gan'`. Stamped by the orchestrator via `updateVendor(mac, vendor)` right after service-UUID-based detection, well before the INFO round-trip lands. The `'gan'` default covers the brief pre-detection window for newly-paired rows and any pre-feature exports (which deserialise as `vendor = "gan"` by default).
 - **Foreign keys are enforced.** `DriverFactory` (Android) passes an `AndroidSqliteDriver.Callback` whose `onConfigure` calls `setForeignKeyConstraintsEnabled(true)`. Until v1.3.0 nothing did, so *every* `ON DELETE CASCADE` in this schema was inert and `deleteProfile` silently orphaned the profile's cubes, solves and settings. See *Foreign keys* below.
-- `solves` indexes: `(user_id, solved_at DESC)` and `(user_id, duration_ms ASC)`. Both used by the History sort modes.
+- `solves` indexes: `(user_id, solved_at DESC)`, `(user_id, is_dnf, (duration_ms + penalty_ms))`, `(user_id, ao5_ms) WHERE ao5_ms IS NOT NULL`. See *Record queries and the ranking index*.
 - `solves.bestDuration` returns `MIN(duration_ms + penalty_ms)` skipping DNFs. Aliased `AS best` so the generated row class has a stable Kotlin property name.
 - `solves.ao5_ms` / `ao5_times` are **derived** columns, maintained by `Ao5` on every path that can change them (insert, penalty edit, delete, import rebuild). `ao5_times` holds the five effective times oldest-first with `D` for a DNF. They are nullable independently: a window of five holding two DNFs has times but no average.
 - `solves.move_count` (default 0) is the total cube turns recorded during the solve. Already counted at runtime by `SolveViewModel` for the live TPS calculation (`fluency = moveCount * 1000 / durationMs`); persisting it lets the History detail dialog show "Turns: N" alongside the time. **Not consumed by any stat** – it's a History-only field by product spec. The 0 default keeps the column SQL-compatible with old call sites (e.g. tests that insert via the repo without the new arg) and lets the History dialog hide the row for pre-feature data via a `> 0` guard.
@@ -1398,6 +1399,7 @@ The `.sq` files always describe the *current* schema. Each `.sqm` is a delta app
 | `1.sqm` | 1 → 2 | creates `cube_names` and copies each existing `cubes.name` across as a per-profile override |
 | `2.sqm` | 2 → 3 | deletes the rows orphaned by profile deletions made while foreign keys were unenforced |
 | `3.sqm` | 3 → 4 | adds `solves.ao5_times` and backfills both Ao5 columns for the whole history |
+| `4.sqm` | 4 → 5 | replaces `solves_user_duration` with `solves_user_rank` and `solves_user_ao5` |
 
 **`1.sqm`.** Creates `cube_names` and carries every existing `cubes.name` across as an override belonging to the profile that currently owns the cube: whoever renamed a cube keeps seeing their name, nobody else inherits it. Cubes whose owning profile no longer exists are skipped — there is no profile for the name to belong to, and filtering here rather than relying on a cleanup elsewhere keeps this file correct under foreign-key enforcement on its own, which matters for a file that will still be run years after it was written.
 
@@ -1412,6 +1414,32 @@ The `.sq` files always describe the *current* schema. Each `.sqm` is a delta app
 ALTER TABLE appends, so the order the files run in decides a migrated database's column order: `ao5_times` here and `cube_mac` in `5.sqm`, matching the order they appear at the end of the `CREATE TABLE` in `Solves.sq`.
 
 Verified by executing the whole chain against a real SQLite database built from the v1-era schema, from every starting version, with foreign keys on and orphans present: ~1 s for 50,000 solves, `PRAGMA integrity_check` and `foreign_key_check` clean, all 100,000 backfilled Ao5 values matching an independent implementation, and the resulting schema identical to a database created fresh from the `.sq` files.
+
+**`4.sqm`.** Swaps the ranking indexes. Its own file, after the backfill rather than inside it, so the bulk UPDATE in `3.sqm` does not maintain `solves_user_ao5` row by row on the way through. See *Record queries and the ranking index* for why `solves_user_duration` served none of the queries that wanted it.
+
+### Record queries and the ranking index
+
+`AppCache.bestDurationMs` re-reads the profile's best time on every emission of `recentSolves` — every solve, every penalty edit, and every profile switch. That was fine as a design and expensive as an implementation, because the index it relied on did not fit the query.
+
+`solves_user_duration` indexed `(user_id, duration_ms)` — the **raw** duration. Every query that ranks solves works in **effective** time (`duration_ms + penalty_ms`), and an index cannot answer a query about an expression it does not contain. So `MIN(duration_ms + penalty_ms)` walked the index and fetched each candidate row from the table to add the penalty and check the DNF flag, and the History best/worst sorts ignored the index entirely and did a full table scan plus a temp B-tree — *per page*.
+
+One index replaces it, with its columns in the order the History sort actually asks for:
+
+```sql
+CREATE INDEX solves_user_rank ON solves(user_id, is_dnf ASC, (duration_ms + penalty_ms) ASC);
+```
+
+Measured on a 100,000-solve database:
+
+| query | before | after |
+|---|---|---|
+| `bestDuration` | 59.4 ms | 0.02 ms |
+| History best-time page | 14.5 ms (SCAN + temp B-tree) | 0.17 ms |
+| History worst-time page | same | 0.22 ms |
+
+`bestDuration` gets SQLite's MIN/MAX optimisation because `user_id` and `is_dnf` are equalities and the MIN argument is the next indexed expression. `pageByDurationAsc` reads the index in order with no sort step, and `pageByDurationDesc` sorts by exactly the reverse and walks the same index backwards.
+
+**This is why there is no denormalised records table.** Storing `best_single` / `best_ao5` per profile and maintaining them on insert, penalty edit, delete and import buys nothing over an index seek that is already O(log n) — a profile with 500,000 solves costs the same as one with 500 — and costs a whole invalidation surface where a cached record can disagree with the data. `bestAo5` is the same story: a partial covering index over the persisted `ao5_ms`.
 
 ### Ao5 as a maintained column
 

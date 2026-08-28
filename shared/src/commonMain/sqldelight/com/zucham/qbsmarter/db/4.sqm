@@ -1,0 +1,13 @@
+-- Schema v4 → v5: the ranking indexes.
+--
+-- Deliberately a file of its own, after `3.sqm` rather than inside it, so
+-- the bulk UPDATE that backfills the Ao5 columns does not maintain
+-- `solves_user_ao5` row by row on its way through.
+--
+-- `solves_user_duration` goes: it indexed the RAW duration while every
+-- query that wanted an ordering wanted the EFFECTIVE one, so it served
+-- neither `bestDuration` nor either History time-sort. See the note on
+-- `solves_user_rank` in Solves.sq for the measurements.
+DROP INDEX solves_user_duration;
+CREATE INDEX solves_user_rank ON solves(user_id, is_dnf ASC, (duration_ms + penalty_ms) ASC);
+CREATE INDEX solves_user_ao5 ON solves(user_id, ao5_ms) WHERE ao5_ms IS NOT NULL;

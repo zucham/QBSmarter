@@ -249,6 +249,20 @@ class SolvesRepository(
     fun snapshotAllForUser(userId: String): List<SolveRow> =
         db.solvesQueries.recentForStats(userId, Long.MAX_VALUE).executeAsList().map(Solves::toRow)
 
+    /**
+     * Best (lowest) Ao5 the profile has ever recorded, or null before it
+     * has five solves.
+     *
+     * Like [bestDuration] this is an index seek, not a scan – it reads
+     * the persisted per-solve `ao5_ms` through the partial
+     * `solves_user_ao5` index rather than recomputing sliding windows.
+     * That is only sound because the column is now maintained on every
+     * path that can invalidate it (see [insert], [delete],
+     * [updatePenalty]) and was backfilled for pre-v2 history.
+     */
+    fun bestAo5(userId: String): Long? =
+        db.solvesQueries.bestAo5(userId).executeAsOne().best
+
     /** One solve by id, or null if it has been deleted. */
     fun byId(id: Long): SolveRow? =
         db.solvesQueries.selectById(id).executeAsOneOrNull()?.toRow()

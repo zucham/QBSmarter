@@ -747,8 +747,9 @@ class SolveViewModel(
         // braces: the cached value is null whenever the user has caching
         // switched off, and reading it alone meant personal bests simply
         // stopped being detected for those users. It is an indexed MIN
-        // seek, so it is cheap enough to sit on this path — measured at
-        // hundredths of a millisecond against a hundred thousand solves.
+        // seek (see `solves_user_rank`), so it is cheap enough to sit on
+        // this path — measured at hundredths of a millisecond against a
+        // hundred thousand solves.
         val previousBest = cache.bestDurationMs.value ?: solvesRepo.bestDuration(uid)
 
         // The Ao5 is no longer computed here. It is derived inside the
