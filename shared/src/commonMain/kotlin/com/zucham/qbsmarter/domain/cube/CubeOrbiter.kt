@@ -55,6 +55,15 @@ class CubeOrbiter(
     private var startRotation: Transform = Transform.IDENTITY
     private var animating = false
 
+    /**
+     * Bumped by [resetImmediately]. An animation in flight captures the
+     * value it started under and stops writing [_rotation] the moment it
+     * no longer matches - otherwise a slerp that was already running
+     * would keep painting over the rotation the reset just forced home,
+     * for the remainder of its tween.
+     */
+    private var resetGeneration = 0
+
     private var scope: CoroutineScope? = null
     private var pendingSnapJob: Job? = null
 
@@ -123,6 +132,30 @@ class CubeOrbiter(
     }
 
     /**
+     * Drop the drag offset immediately, with no animation.
+     *
+     * The animated paths ([animateToIdentity], [snapToNearest]) all need
+     * a bound scope, which only exists while the Solve screen is on
+     * display. This one doesn't, so it is the reset that still works
+     * when the cube view isn't composed - the disconnect path uses it as
+     * its fallback so a cube that dropped while the user was on another
+     * screen isn't found tilted when they come back.
+     *
+     * Cancels any pending auto-snap and any in-flight animation's effect
+     * by clearing [animating]: whatever was easing toward a target is
+     * moot once the rotation is forced home.
+     */
+    fun resetImmediately() {
+        pendingSnapJob?.cancel()
+        pendingSnapJob = null
+        startEvent = null
+        startRotation = Transform.IDENTITY
+        animating = false
+        resetGeneration++
+        _rotation.value = Transform.IDENTITY
+    }
+
+    /**
      * Animate the orbiter back to the default orientation (white-up,
      * green-front). The "Reset orientation" button calls this.
      */
@@ -134,17 +167,22 @@ class CubeOrbiter(
 
     private suspend fun animateTo(startQ: Quaternion, targetQ: Quaternion) {
         animating = true
+        // Captured, not read live: if a reset lands mid-tween this
+        // animation must go quiet rather than fight it. See
+        // [resetGeneration].
+        val generation = resetGeneration
         try {
             val anim = Animatable(0f)
             anim.animateTo(
                 targetValue = 1f,
                 animationSpec = tween(durationMillis = SNAP_DURATION_MS, easing = CubicEaseInOut),
             ) {
+                if (generation != resetGeneration) return@animateTo
                 _rotation.value = slerp(startQ, targetQ, value).toTransform()
             }
-            _rotation.value = targetQ.toTransform()
+            if (generation == resetGeneration) _rotation.value = targetQ.toTransform()
         } finally {
-            animating = false
+            if (generation == resetGeneration) animating = false
         }
     }
 

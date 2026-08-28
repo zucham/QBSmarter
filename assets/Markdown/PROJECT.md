@@ -499,6 +499,7 @@ The Solve screen uses `catchUpVisualTo` because the move queue is stopped while 
 - Auto-snap chooses the nearest of the **24 cube-symmetric orientations** (`CUBE_ORIENTATIONS`) – fights floating-point drift after many gestures
 - Auto-snap is gated on the `autoSnapAllowed` predicate injected by `RubiksCube` (`{ !gyroscope.enabled }`). With the gyro live the composed pose isn't axis-aligned whatever the drag component snaps to, so snapping would just yank the cube. Injected as a predicate rather than a mutable flag so there's no second copy of the condition to keep in sync.
 - Manual "Reset orientation" button slerp-animates back to identity
+- `resetImmediately()` drops the drag offset with no animation and needs no scope. It is the fallback used on disconnect, because a link can just as easily drop while the user is on Devices with the cube view disposed (and therefore with no bound scope to animate in). A `resetGeneration` counter makes an in-flight slerp go quiet instead of painting over the forced reset for the rest of its tween.
 
 The Solve screen hides the Reset Orientation button when the orbit is already approximately at identity (`isApproximatelyIdentity`, ~1.8° tolerance) **and** the gyro is off – with the gyro running the button is the only way back to a centred pose, so it stays up.
 
@@ -519,6 +520,8 @@ The Solve screen hides the Reset Orientation button when the orbit is already ap
 **Driving the loop.** `CubeView`'s `Frame { }` calls `cube.advanceFrame(frameInfo.dt)` once per rendered frame, before any piece transform is read, so every cubie in a frame sees the same orientation. `CubeGyroscope` deliberately avoids Compose `MutableState`: samples arrive tens of times a second and the only consumer is the polling render loop, so routing them through the snapshot system would invalidate state on every packet for nothing. The BLE/UI threads write `@Volatile` fields; the render thread exclusively owns `displayed` / `cachedTransform`, and the cached transform is rebuilt only when `displayed` actually moves.
 
 **Reset semantics.** Switching the toggle off — or losing the BLE link — calls `reset()`, which clears `basis` / `latestSample` and points `target` at identity. `displayed` is deliberately left alone so `advance` eases the cube home rather than snapping at a frame boundary. "Reset orientation" calls `recenter()` **and** animates the orbiter to identity, so both layers of `outer` come home as one motion.
+
+**Disconnect.** Losing the cube runs `RubiksCube.resetView()`: gyro `reset()`, orientation home (animated when a scope is bound, `orbiter.resetImmediately()` otherwise), and logical/visual state back to solved. Everything on screen came from a cube that is no longer reporting — a pose frozen at the angle the link died at, and a permutation the user is free to change behind our back — and both read as "broken" rather than "disconnected".
 
 **Persistence.** The toggle lives in the per-profile `solving.gyroEnabled` setting (default false), surfaced as `SolveViewModel.gyroEnabled`. `_gyroEnabled` is seeded from `cube.gyroscope.enabled` rather than `false`: `RubiksCube` is an app-wide singleton while the VM is recreated on every navigation back to Solve, so seeding from `false` would cycle the gyro off then on and discard the user's re-centering.
 

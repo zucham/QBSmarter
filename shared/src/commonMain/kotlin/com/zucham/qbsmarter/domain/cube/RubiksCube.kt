@@ -215,6 +215,32 @@ class RubiksCube {
     }
 
     /**
+     * Return the cube view to a clean slate: solved, default
+     * orientation, no gyro pose.
+     *
+     * Called when the cube drops off the wire. Everything the view was
+     * showing came from a cube that is no longer reporting - a pose
+     * frozen at whatever angle the link died at, and a permutation that
+     * the user is free to change without us hearing about it. Both are
+     * worse than nothing, so both go.
+     *
+     * The orientation reset animates when a scope is available and
+     * snaps otherwise, because a disconnect can just as easily land
+     * while the user is on the Devices screen with the cube view
+     * disposed; [CubeOrbiter.resetImmediately] is the path that still
+     * works there.
+     *
+     * The user's *gyro preference* is deliberately untouched: it is a
+     * setting, not session state, and reconnecting should resume
+     * tracking without the user re-arming the button.
+     */
+    fun resetView() {
+        gyroscope.reset()
+        if (!animateOrientationToIdentity()) orbiter.resetImmediately()
+        resetState()
+    }
+
+    /**
      * Reset both visual and logical state to solved.
      *
      * Routes through the queue so any in-flight or pending moves are

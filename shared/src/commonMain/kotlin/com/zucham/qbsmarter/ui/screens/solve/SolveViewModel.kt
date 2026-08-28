@@ -306,12 +306,16 @@ class SolveViewModel(
                     }
                 } else if (wasConnected && state in CONNECTION_LOSS_STATES) {
                     wasConnected = false
-                    // Drop the gyro pose along with everything else. No
-                    // more samples are coming, and a cube frozen at
-                    // whatever angle it happened to be at when the link
-                    // died looks broken. The user's preference is left
-                    // alone – reconnecting resumes tracking.
-                    cube.gyroscope.reset()
+                    // Wipe the cube view along with the solve state. No
+                    // more samples or moves are coming, so everything on
+                    // screen is a snapshot of a cube we can no longer
+                    // see: a pose frozen at whatever angle the link died
+                    // at, and a permutation the user is free to change
+                    // behind our back. Both read as "broken" rather than
+                    // "disconnected". The gyro *preference* survives –
+                    // it's a setting, and reconnecting resumes tracking.
+                    cube.resetView()
+                    logicalState = CubeState.SOLVED
                     abortToIdle()
                 }
             }
