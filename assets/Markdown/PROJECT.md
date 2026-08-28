@@ -364,18 +364,53 @@ The `ConnectionOrchestrator` picks which vendor's driver to dispatch to via `Cub
 
 **Encryption.** GAN and MoYu both use AES-128 CBC with a static root key + IV mixed with a 6-byte per-cube salt derived from the BLE MAC (reversed bytes). Only the root key and IV differ between vendors; the salt-mix algorithm and the two-block encryption-for-payloads-larger-than-16-bytes scheme are identical. The shared expect/actual `AesCbcMacSaltEncryptor(rootKey, rootIv, salt)` carries the actual AES code; `GanEncryptor` and `MoyuEncryptor` are thin wrappers that bake in the vendor-specific constants. (The `% 0xFF` salt-mix modulus instead of `% 0x100` is a quirk of the original GAN protocol that MoYu inherited verbatim.)
 
-**Per-generation parsers (GAN).** All three implement the small `GanParser` interface (`reset()`, `buildCommand(cmd)`, `suspend parseStatePacket(bytes, historyRequester)`). They diverge in:
+**One driver, many protocols.** Every cube family runs through a single `ProtocolCubeDriver`. What differs between families lives entirely in a `CubeProtocol` — a pure codec plus an optional handshake, owning no coroutines, no BLE handles and no lifecycle. Adding a brand is: write one `CubeProtocol`, add one row to `CubeProtocolRegistry`. Nothing else changes — not the driver, not the transport, not the orchestrator, not the UI.
 
-- **Packet format.** Gen2 is heavily bit-packed with BE words; Gen3 prefixes a `0x55` magic byte and uses byte-aligned fields with a mix of LE timestamps; Gen4 drops the magic byte but otherwise mirrors Gen3 with shifted offsets.
-- **Recovery model.** Gen2 has a 7-move on-cube replay buffer; if we lag further it surfaces `MovesMissed` and the orchestrator does a full `RequestFacelets` resync. Gen3/Gen4 add a targeted move-history retransmit (`SmartCubeCommand.RequestMoveHistory(serial, count)`); the parsers maintain a FIFO of pending moves and ask the cube to backfill gaps via the `historyRequester` callback. The orchestrator's MovesMissed → Facelets path is still the bail-out for FIFO overflow.
-- **Hardware reporting.** Gen4 spreads the hardware-info reply across four separate events (`0xFA`/`0xFC`/`0xFD`/`0xFE`); the parser accumulates fragments and emits a single unified `Hardware` event once all four arrive.
-- **Gyro support.** Gen2 always reports gyro; Gen3 never does (i Carry 2 hardware lacks the sensor); Gen4 reports it only on specific hardware names (currently `GAN12uiM`, the GAN12 ui Maglev).
+This replaced a driver *per vendor* (`GanCubeDriver`, `MoyuCubeDriver`) plus a `CubeDriverFacade` that multiplexed between them. Each driver carried its own copy of the same scope, ingest job, event flow, decrypt call and connect/disconnect bookkeeping, and the set was about to grow to six. With one driver there is nothing left to multiplex, so the facade is gone too.
 
-**MoYu V10 protocol.** 20-byte AES-CBC-encrypted packets, message type in byte 0. Distinct events: `0xA1` Cube Info (model name + HW/SW versions + gyro flags + serial), `0xA3` Cube Status / Facelets (48 sticker colours × 3 bits in FBUDLR order + serial), `0xA4` Cube Power (battery 0..100), `0xA5` Cube Move (5 most-recent moves with per-move u16 elapsed-ms + serial; each move is a 5-bit code in 0..11 directly encoding face+direction), `0xAB` Gyro (4× LE s32 quaternion over `2^30`, in component order `(w, x, -z, y)`). `0xAC` is a special command to enable/disable gyro; sent on connect to ensure the cube is in a known-on state regardless of what the previous client session left it in.
+```
+CubeProtocolRegistry  (the table: UUIDs + encryptor factory + protocol factory)
+        |  resolve(advertisedServices, identity)
+        v
+ConnectionOrchestrator --- BleCubeTransport ---+
+        |                                      |
+        +---------> ProtocolCubeDriver <-------+
+                        |  decrypt -> CubeProtocol.decode -> SmartCubeEvent
+                        v
+                   events: SharedFlow   (stable across every cube swap)
+```
 
-The Facelets event delivers sticker colors rather than CP/CO/EP/EO arrays – `MoyuFaceletDecoder` re-orders to URFDLB and re-maps colors to face letters, then hands off to `CubeState.fromKociembaFacelets(...)` which walks the corner and edge facelet maps to recover CP/CO/EP/EO. The recovery model mirrors GAN Gen2's: 5-move on-cube buffer (shorter than Gen2's 7), no targeted retransmit, MovesMissed → Facelets resync fallback driven by the orchestrator.
+**The registry is the whole cube catalogue.** One row per wire protocol, carrying service + characteristic UUIDs, name prefixes, an encryptor factory (or none — GoCube, Giiker and MoYu MHC are plaintext) and a protocol factory. Resolution is service-UUID-first, name-second; the name only ever breaks ties between protocols sharing a service.
 
-**Why per-connect encryptor:** both GAN and MoYu cubes derive their AES salt from the BLE MAC. Each cube gets its own encryptor instance built from that cube's MAC at connect time. The drivers themselves are Koin singletons; the encryptor is passed into `connect()` and discarded after `disconnect()`. Subscribers to `facade.events` therefore stay stable across cube swaps, generation swaps, and even vendor swaps – they automatically see events from whichever cube is currently bound.
+| Protocol id | Vendor | Service | Notable cubes |
+|---|---|---|---|
+| `gan-gen2` | GAN | `6e400001…4179` | GAN12 ui / ui FreePlay, i Carry, i Carry S, i3, Mini ui FreePlay, Monster Go AI, MoYu AI 2023 |
+| `gan-gen3` | GAN | `8653000a…` | GAN356 i Carry 2 |
+| `gan-gen4` | GAN | `00000010-0000-fff7…` | GAN12 ui Maglev, GAN14 ui FreePlay, GAN i4 |
+| `gan-gen1` | GAN | `0000fff0` + `0000180a` | GAN356 i, i Play / i2 — **registered, not drivable** |
+| `moyu-wcu` | MoYu | `0783b03e…cb0` | WeiLong V10 / V11 AI family |
+| `moyu-mhc` | MoYu | `00001000` | WeiLong AI (2021) — moves only |
+| `qiyi` | QiYi | `0000fff0` | QiYi Smart Cube, X-Man Tornado V4 AI |
+| `gocube` | GoCube | `6e400001…ca9e` | GoCube, GoCube Edge, GoCube X |
+| `rubiks-connected` | Rubik's | `6e400001…ca9e` | Rubik's Connected / Connected X |
+| `giiker` | GiiKER | `0000aadb` | Super Cube i3 / i3S / i3SE, Xiaomi Mi Smart |
+
+Two service collisions are resolved deliberately. `0000fff0` is shared by QiYi and GAN Gen1 — Gen1 additionally requires `0000180a` (Device Information) and sits last in the table, so QiYi wins on name. The GoCube UART service is shared by GoCube and Rubik's Connected, which are the *same protocol* under two brands: one `GoCubeProtocol` class takes the vendor as a constructor argument purely so the Devices screen prints the right chip.
+
+**Shared protocol machinery** lives in `domain/driver/protocol/`:
+
+- `MoveRecoveryFifo` — serial-gap detection and backfill for cubes that number their moves (GAN Gen3/Gen4). This existed *twice*, copied verbatim into both parsers under a comment claiming that factoring it out would obscure the per-generation differences. There were none: only the wire offsets that build a `Move` differ, and those stayed behind. Equivalence of the extracted version against the original was checked over 3000 randomised move/gap/backfill sessions.
+- `ProtocolCodecs` — CRC-16/MODBUS, big/little-endian readers, GAN's sign-magnitude decoder, and `unitQuaternion`, which normalises by *measured* magnitude rather than the vendor's nominal scale (GoCube documents 2^14 but emits ~16355; QiYi documents 1000 but emits ~1002.6).
+
+**Gyro capability is detected by observation, never by model name.** The GAN Gen4 allow-list (`GAN12uiM`) is provably incomplete — the GAN i4 streams `0xEC` gyro packets and is not on it — so `Hardware.gyroSupported` stays `Boolean?` and the orchestrator upgrades a cube to gyro-capable the moment real gyro data arrives. That one rule is what makes unreleased models work for free.
+
+**Known protocol gaps**, deliberately left as documented TODOs rather than guesses:
+
+- **GAN Gen1** needs a polled multi-characteristic transport (four read-only characteristics, no notifications) and a System-ID-salted encryptor with no IV. Registered with `supported = false` so connecting reports "recognised, not supported" instead of "unknown device".
+- **MoYu MHC** streams battery/hardware on `0x1002` and gyro on `0x1004`; our transport binds one notify characteristic, so only moves (`0x1003`) are reachable.
+- **Giiker battery** lives on a second service (`0000aaaa`), unreachable for the same reason.
+- **GAN 16 UI, i Carry 4, i Carry E, 12 UI SP, 356 i3 V2** have no public protocol data in any repository — not cstimer, not gan-web-bluetooth, not cubing.js. They are not stubbed, because a stub implies a known shape. If they reuse an existing service UUID they will be driven correctly today with no code change.
+
 
 **Driver scope:** each driver owns its own `CoroutineScope(SupervisorJob() + parserDispatcher)` (default `Dispatchers.Default`), so decryption and parsing never run on the BLE binder thread. The events `SharedFlow` has `replay = 0`, `extraBufferCapacity = 64` – generous enough that a paused subscriber (user navigated away momentarily) doesn't drop moves. The facade has its own `MutableSharedFlow` with the same buffer settings so the merged stream gets equivalent jitter tolerance.
 
