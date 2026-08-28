@@ -765,6 +765,17 @@ The dot+name row in `ConnectionIndicator` is a tappable shortcut to the Devices 
 - **Reset Orientation** and **Gyro** use `primaryContainer/onPrimaryContainer` so they pick up the current seed color (`ThemedButton`).
 - **Reset State** uses `error/onError` (saturated red + white) via `DestructiveButton`. This is the only destructive control in the row, and the previous `errorContainer/onErrorContainer` rendered as a soft pink in light mode that read like a neutral chip rather than a wipe-everything affordance.
 
+##### The Gyro button's active dot
+
+While gyro is on, the label is led by a green dot — same `StatusColors.ConnectedGreen`, same `ConnectionDotSize`, as the connection dot at the top of the screen, so "green dot" means one thing app-wide: something is streaming right now. `ThemedToggleButton`'s fill swap alone is a hue shift inside a single palette, which is easy to miss at a glance and invisible to anyone who can't separate the two shades. `stateDescription` remains the accessible signal; the dot itself is decorative and carries no content description, so it doesn't announce twice.
+
+The dot is wrapped in `AnimatedVisibility` with `fadeIn + expandHorizontally` / `fadeOut + shrinkHorizontally` on matched durations (220 ms in, 160 ms out). The expand/shrink half is what keeps the button from lurching: it animates the element's *measured width* from zero, so the button — and the buttons beside it in the row — reflow a fraction of a dp per frame instead of stepping by the dot's full width in one. Collapsing toward `Alignment.Start` slides the dot out from behind the button's leading edge rather than across the label. The dot and its 6 dp trailing gap share one `Row` inside the transition, so the gap animates with it instead of being left behind when gyro is off.
+
+Two details are easy to lose:
+
+- `ActiveDot` is a **standalone composable**, not an inline `AnimatedVisibility` in the button's content lambda. Written inline it would sit in a `RowScope`, where overload resolution picks `RowScope.AnimatedVisibility` and its own default enter/exit — the same trap `AnimatedResetOrientationButton` sidesteps.
+- The toggle button carries `Modifier.widthIn(min = 1.dp)`. Material's `Button` applies a 58 dp `defaultMinSize`, and "Gyro" at this row's compact padding measures under that, so the unchecked button is width-clamped and would swallow the first two thirds of the expansion — sitting perfectly still, then lurching. `defaultMinSize` only applies when incoming constraints leave `minWidth` at zero, so a nominal `widthIn` ahead of it takes the clamp out of play and the width simply follows the content.
+
 ##### StatGrid contrast
 
 `StatGrid`'s container background comes from `tintedContainerBackground()` (see *Tinted container helper* under *AppTheme*). Inside, the 3-column grid of `StatTile`s uses `outlineVariant` as the tile fill – nominally a divider role, used here for its tonal value: clearly darker than the tinted container in light mode, clearly lighter in dark mode, in both cases without per-mode branching. Earlier choices here (plain `surface`, then `surfaceContainerHighest`) gave too small a step against the container; `outlineVariant` is the smallest-step-up that reads as a deliberately-different surface in either theme.

@@ -3,10 +3,12 @@ package com.zucham.qbsmarter.ui.screens.solve
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandHorizontally
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
+import androidx.compose.animation.shrinkHorizontally
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -23,6 +25,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -526,11 +529,18 @@ private fun ThemedButton(label: String, onClick: () -> Unit) {
  * animated so the state change is legible even if the user's eye is on
  * the cube rather than the button.
  *
- * [stateLabel] carries the on/off state for screen readers – the visual
- * fill is the only cue otherwise, and colour alone isn't an accessible
- * signal. It's published as `stateDescription` (which augments the
- * button's own text) rather than `contentDescription` (which would
- * replace it).
+ * While checked, the label is led by [ActiveDot] – the same green dot the
+ * connection indicator uses at the top of the screen. The fill change on
+ * its own is a hue shift within one palette, which is easy to miss at a
+ * glance and invisible to anyone who can't separate the two shades; a
+ * dot that is either there or not is unambiguous.
+ *
+ * [stateLabel] carries the on/off state for screen readers – neither the
+ * fill nor the dot is an accessible signal on its own. It's published as
+ * `stateDescription` (which augments the button's own text) rather than
+ * `contentDescription` (which would replace it). The dot itself is
+ * decorative and carries no content description, so it doesn't announce
+ * a second time.
  */
 @Composable
 private fun ThemedToggleButton(
@@ -555,6 +565,16 @@ private fun ThemedToggleButton(
         onClick = onClick,
         modifier = Modifier
             .heightIn(min = SolveSizes.actionButtonHeight)
+            // Opt out of Material's 58 dp default minimum width. "Gyro"
+            // plus this row's compact padding measures under that, so the
+            // unchecked button is width-clamped – and a clamped button
+            // swallows the first two thirds of [ActiveDot]'s expansion,
+            // sitting perfectly still and then lurching. `defaultMinSize`
+            // (which is where the 58 dp comes from) only applies when the
+            // incoming constraints leave `minWidth` at zero, so a nominal
+            // `widthIn` ahead of it takes the clamp out of play and the
+            // button's width simply follows its content.
+            .widthIn(min = ToggleButtonMinWidth)
             .semantics {
                 stateDescription = stateLabel
                 toggleableState = if (checked) ToggleableState.On else ToggleableState.Off
@@ -568,9 +588,84 @@ private fun ThemedToggleButton(
             contentColor = contentColor,
         ),
     ) {
+        ActiveDot(visible = checked)
         Text(label, fontSize = SolveSizes.actionButtonFontSize, maxLines = 1)
     }
 }
+
+/**
+ * The "this is live" dot that leads the label inside [ThemedToggleButton] –
+ * same green, same diameter as the connection dot in [ConnectionIndicator],
+ * so "green dot = something is streaming" means one thing across the app.
+ *
+ * Two things have to animate here, and they have to animate *together*:
+ *
+ *  - the dot itself fades in/out rather than blinking into existence, and
+ *  - the button's width grows/shrinks to make room for it, rather than
+ *    stepping by the dot's full width in a single frame (which is what
+ *    reads as "jagged" – the neighbouring buttons in the action row snap
+ *    sideways because the row re-measures once instead of per frame).
+ *
+ * `expandHorizontally`/`shrinkHorizontally` handle the second point: the
+ * transition animates this element's *measured width* from 0 to its full
+ * size, so every frame produces a slightly wider element and the parent
+ * `Row` reflows continuously. Pairing it with `fadeIn`/`fadeOut` on the
+ * same duration and easing keeps the two halves in lockstep. Collapsing
+ * toward [Alignment.Start] means the dot slides out from behind the
+ * button's leading edge instead of sliding across the label.
+ *
+ * The dot and its trailing gap live inside the same `Row` so both are
+ * part of the animated width – animating the dot alone would leave a
+ * permanent 6 dp gap in front of the label while gyro is off.
+ *
+ * This is deliberately a standalone composable rather than an inline
+ * `AnimatedVisibility` inside the button's content lambda: written
+ * inline it sits in a `RowScope`, where overload resolution picks
+ * `RowScope.AnimatedVisibility` and drags in its own default enter/exit
+ * (see [AnimatedResetOrientationButton] for the same dodge).
+ */
+@Composable
+private fun ActiveDot(visible: Boolean) {
+    AnimatedVisibility(
+        visible = visible,
+        enter = fadeIn(animationSpec = tween(ActiveDotEnterMs)) +
+            expandHorizontally(
+                animationSpec = tween(ActiveDotEnterMs),
+                expandFrom = Alignment.Start,
+            ),
+        exit = fadeOut(animationSpec = tween(ActiveDotExitMs)) +
+            shrinkHorizontally(
+                animationSpec = tween(ActiveDotExitMs),
+                shrinkTowards = Alignment.Start,
+            ),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                modifier = Modifier
+                    .size(ConnectionDotSize)
+                    .background(StatusColors.ConnectedGreen, CircleShape),
+            )
+            Spacer(Modifier.width(ActiveDotGap))
+        }
+    }
+}
+
+/** Gap between the active dot and the label it leads. */
+private val ActiveDotGap = 6.dp
+
+/**
+ * Non-zero only so that it displaces `Button`'s own default minimum
+ * width; the real lower bound on the button is its content plus padding.
+ */
+private val ToggleButtonMinWidth = 1.dp
+
+/**
+ * Appear slightly slower than it disappears: growing the button pushes
+ * its neighbours, so it wants to read as deliberate, while collapsing
+ * back should just get out of the way.
+ */
+private const val ActiveDotEnterMs = 220
+private const val ActiveDotExitMs = 160
 
 /**
  * Destructive variant of [ThemedButton]. Filled in the theme's `error`
