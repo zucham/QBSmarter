@@ -23,6 +23,11 @@
     <string name="solve_reset_orientation">Reset orientation</string>
     <string name="solve_reset_state">Reset state</string>
     <string name="solve_toggle_gyro">Gyro</string>
+    <!-- Screen-reader labels for the Gyro toggle. The button's visible
+         text is just "Gyro"; these carry the on/off state, which is
+         otherwise conveyed only by the button's fill colour. -->
+    <string name="solve_toggle_gyro_on">Gyro tracking on</string>
+    <string name="solve_toggle_gyro_off">Gyro tracking off</string>
     <string name="solve_no_cube">No cube connected</string>
     <string name="solve_connect_cube">Connect a cube</string>
     <string name="solve_quick_overview">Quick overview</string>

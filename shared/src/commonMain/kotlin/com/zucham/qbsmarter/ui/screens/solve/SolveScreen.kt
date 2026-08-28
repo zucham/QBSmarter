@@ -1,6 +1,7 @@
 package com.zucham.qbsmarter.ui.screens.solve
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -46,6 +47,10 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.semantics.toggleableState
+import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -85,6 +90,8 @@ import qbsmarter.shared.generated.resources.solve_solved
 import qbsmarter.shared.generated.resources.solve_tip_uu_prefix
 import qbsmarter.shared.generated.resources.solve_tip_uu_suffix
 import qbsmarter.shared.generated.resources.solve_toggle_gyro
+import qbsmarter.shared.generated.resources.solve_toggle_gyro_off
+import qbsmarter.shared.generated.resources.solve_toggle_gyro_on
 
 /**
  * Solve screen layout (top → bottom):
@@ -172,11 +179,19 @@ fun SolveScreen(onNavigateToDevices: () -> Unit = {}) {
     val newPbEvent by vm.newPbEvent.collectAsState()
     val lastSolveInfo by vm.lastSolveInfo.collectAsState()
     val mode by vm.themeController.mode.collectAsState()
+    val gyroEnabled by vm.gyroEnabled.collectAsState()
 
     // Derive "is the cube already aligned" from the orbiter's
     // rotation. The orbiter exposes a Compose MutableState<Transform>, so
     // derivedStateOf re-evaluates on every animation frame the slerp
     // updates it. The result drives Reset Orientation visibility.
+    //
+    // Only the drag offset is considered, deliberately: the gyro pose is
+    // owned by the render thread and polled per frame, so observing it
+    // here would mean recomposing this screen at the display refresh
+    // rate. The gyro's contribution to the button's visibility is handled
+    // by the `gyroEnabled` term at the call site instead – while gyro is
+    // running the cube is almost never at home, so the button stays up.
     val isOrientationAligned by remember(vm.cube) {
         derivedStateOf {
             isApproximatelyIdentity(vm.cube.orbiter.rotation)
@@ -244,9 +259,13 @@ fun SolveScreen(onNavigateToDevices: () -> Unit = {}) {
             // button entirely; the user discovers the toggle only on
             // hardware that actually has the feature.
             showGyroButton = connection.gyroSupported == true,
-            // Reset Orientation is only meaningful when the cube
-            // *isn't* already at identity. Hidden + animated otherwise.
-            showResetOrientation = !isOrientationAligned,
+            gyroEnabled = gyroEnabled,
+            // Reset Orientation is only meaningful when there's
+            // something to reset. That's true when the drag offset is
+            // off-identity, and also whenever the gyro is live – the
+            // button then re-homes the gyro baseline, which is the only
+            // way back to a default pose while the cube is being moved.
+            showResetOrientation = !isOrientationAligned || gyroEnabled,
         )
         ScrambleCard(scramble, scrambleProgress, deviationMoves, vm::newScramble)
 
@@ -387,7 +406,10 @@ private fun ConnectionIndicator(
  * Gyro is the second slot and only shows when [showGyroButton] is true
  * (cube confirmed to support gyro via the INFO handshake). Hidden in all
  * other cases (unknown / unsupported) so the button doesn't tease a
- * non-functional feature.
+ * non-functional feature. Unlike its neighbours it's a *toggle*, so it
+ * carries its state in its fill via [gyroEnabled] – without that the
+ * user has no way to tell whether a tap turned the feature on or off,
+ * since a stationary cube looks identical either way.
  *
  * The Spacer with weight=1f anchors Reset State to the right edge no
  * matter how many of the left-side slots are currently visible.
@@ -401,6 +423,7 @@ private fun ActionRow(
     onResetState: () -> Unit,
     onToggleGyro: () -> Unit,
     showGyroButton: Boolean,
+    gyroEnabled: Boolean,
     showResetOrientation: Boolean,
 ) {
     Row(
@@ -413,7 +436,15 @@ private fun ActionRow(
             onClick = onResetOrientation,
         )
         if (showGyroButton) {
-            ThemedButton(stringResource(Res.string.solve_toggle_gyro), onToggleGyro)
+            ThemedToggleButton(
+                label = stringResource(Res.string.solve_toggle_gyro),
+                checked = gyroEnabled,
+                stateLabel = stringResource(
+                    if (gyroEnabled) Res.string.solve_toggle_gyro_on
+                    else Res.string.solve_toggle_gyro_off,
+                ),
+                onClick = onToggleGyro,
+            )
         }
         Spacer(modifier = Modifier.weight(1f))
         DestructiveButton(stringResource(Res.string.solve_reset_state), onResetState)
@@ -457,6 +488,63 @@ private fun ThemedButton(label: String, onClick: () -> Unit) {
         colors = ButtonDefaults.buttonColors(
             containerColor = MaterialTheme.colorScheme.primaryContainer,
             contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+        ),
+    ) {
+        Text(label, fontSize = SolveSizes.actionButtonFontSize, maxLines = 1)
+    }
+}
+
+/**
+ * On/off variant of [ThemedButton] for actions that latch rather than
+ * fire once (currently just Gyro).
+ *
+ * Checked uses the theme's full-strength `primary` fill; unchecked keeps
+ * [ThemedButton]'s softer `primaryContainer`, so a toggled-on button
+ * reads as clearly "active" next to the plain action buttons beside it
+ * while still sitting inside the same seed-driven palette. Colors are
+ * animated so the state change is legible even if the user's eye is on
+ * the cube rather than the button.
+ *
+ * [stateLabel] carries the on/off state for screen readers – the visual
+ * fill is the only cue otherwise, and colour alone isn't an accessible
+ * signal. It's published as `stateDescription` (which augments the
+ * button's own text) rather than `contentDescription` (which would
+ * replace it).
+ */
+@Composable
+private fun ThemedToggleButton(
+    label: String,
+    checked: Boolean,
+    stateLabel: String,
+    onClick: () -> Unit,
+) {
+    val containerColor by animateColorAsState(
+        targetValue = if (checked) MaterialTheme.colorScheme.primary
+        else MaterialTheme.colorScheme.primaryContainer,
+        animationSpec = tween(180),
+        label = "toggleContainer",
+    )
+    val contentColor by animateColorAsState(
+        targetValue = if (checked) MaterialTheme.colorScheme.onPrimary
+        else MaterialTheme.colorScheme.onPrimaryContainer,
+        animationSpec = tween(180),
+        label = "toggleContent",
+    )
+    Button(
+        onClick = onClick,
+        modifier = Modifier
+            .heightIn(min = SolveSizes.actionButtonHeight)
+            .semantics {
+                stateDescription = stateLabel
+                toggleableState = if (checked) ToggleableState.On else ToggleableState.Off
+            },
+        contentPadding = PaddingValues(
+            horizontal = SolveSizes.actionButtonHorizontalPadding,
+            vertical = 4.dp,
+        ),
+        colors = ButtonDefaults.buttonColors(
+            containerColor = containerColor,
+            contentColor = contentColor,
         ),
     ) {
         Text(label, fontSize = SolveSizes.actionButtonFontSize, maxLines = 1)

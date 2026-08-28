@@ -109,6 +109,18 @@ class SettingsRepository(
         // a one-line revert when we return to the feature. The string
         // resource (`settings_sound`) is also preserved.
 
+        /**
+         * "1" / "0". Default false. Whether the 3D cube follows the
+         * physical cube's gyroscope.
+         *
+         * Off by default because it only does anything on the subset of
+         * cubes that carry the sensor, and because a cube that moves on
+         * its own is a surprise for a user who didn't ask for it. Stored
+         * per profile like every other preference, so it survives a
+         * restart and travels with the profile.
+         */
+        const val GYRO_ENABLED = "solving.gyroEnabled"
+
         // Display
         /** "1" / "0". Default true. */
         const val KEEP_SCREEN_ON = "solving.keepScreenOn"

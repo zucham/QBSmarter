@@ -469,6 +469,7 @@ class SettingsViewModel(
             SettingsRepository.Keys.INSPECTION_ENABLED,
             // SettingsRepository.Keys.SOUND_ENABLED,  // disabled – see SettingsRepository.Keys
             SettingsRepository.Keys.KEEP_SCREEN_ON,
+            SettingsRepository.Keys.GYRO_ENABLED,
             SettingsRepository.Keys.THEME_SEED,
             SettingsRepository.Keys.THEME_MODE,
             SettingsRepository.Keys.LANGUAGE,

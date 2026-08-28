@@ -18,6 +18,8 @@
     <string name="solve_reset_orientation">Resetovat orientaci</string>
     <string name="solve_reset_state">Resetovat stav</string>
     <string name="solve_toggle_gyro">Gyro</string>
+    <string name="solve_toggle_gyro_on">Sledování gyroskopu zapnuto</string>
+    <string name="solve_toggle_gyro_off">Sledování gyroskopu vypnuto</string>
     <string name="solve_no_cube">Žádná kostka</string>
     <string name="solve_connect_cube">Připojit kostku</string>
     <string name="solve_quick_overview">Stručný přehled</string>

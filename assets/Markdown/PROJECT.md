@@ -467,13 +467,39 @@ The Solve screen uses `catchUpVisualTo` because the move queue is stopped while 
 - DOWN captures start state; MOVE accumulates yaw + pitch on the start rotation
 - UP closes the gesture and schedules an auto-snap (500 ms `SNAP_DELAY_MS`)
 - Auto-snap chooses the nearest of the **24 cube-symmetric orientations** (`CUBE_ORIENTATIONS`) – fights floating-point drift after many gestures
+- Auto-snap is gated on the `autoSnapAllowed` predicate injected by `RubiksCube` (`{ !gyroscope.enabled }`). With the gyro live the composed pose isn't axis-aligned whatever the drag component snaps to, so snapping would just yank the cube. Injected as a predicate rather than a mutable flag so there's no second copy of the condition to keep in sync.
 - Manual "Reset orientation" button slerp-animates back to identity
 
-The Solve screen hides the Reset Orientation button when the orbit is already approximately at identity (`isApproximatelyIdentity`, ~1.8° tolerance).
+The Solve screen hides the Reset Orientation button when the orbit is already approximately at identity (`isApproximatelyIdentity`, ~1.8° tolerance) **and** the gyro is off – with the gyro running the button is the only way back to a centred pose, so it stays up.
 
 #### Gyro
 
-Cubes that report it can override the orbiter rotation with their own measured orientation. `RubiksCube.gyroEnabled.value = true` swaps the outer rotation source from `orbiter.rotation` to `orientationQuat.value` (last-received `SmartCubeEvent.Gyro.quat`).
+`CubeGyroscope` (in `domain/cube/`) owns everything about the physical cube's orientation, so `RubiksCube` stays about cube *state* and `CubeOrbiter` stays about the user's drag. Any cube reporting gyro data feeds it via `SolveViewModel` → `cube.gyroscope.onSample(quat)`; the pipeline is vendor- and generation-agnostic.
+
+**Pipeline.** `raw (cube axes) --remap--> sample --basis--> target --slerp--> displayed`
+
+1. **Remap** (`Quaternion.toRendererFrame()`). The cube's sensor frame is not the renderer's: `(x, y, z) -> (x, z, -y)`, a −90° rotation about X. A basis change of a rotation transforms only its axis, so permuting the vector part and leaving `w` alone is the entire conversion. Same mapping the official GAN reference client applies. Normalised on the way out — the wire format quantises each component to 15 bits + sign.
+2. **Basis.** `target = basis * sample`. `basis` starts at identity, so tracking is **absolute**: enabling the gyro shows the orientation the cube actually reports. `recenter()` sets `basis = sample.conjugate()`, re-homing the cube without interrupting tracking.
+3. **Smoothing.** Gyro notifications arrive in bursts at an uneven rate well below the display refresh rate; rendering `target` directly reads as a visible stutter — the cube teleports between poses. `advance(dt)` eases `displayed` toward `target` with `t = 1 - exp(-dt / SMOOTHING_TAU)`. Deriving `t` from the real frame delta rather than a fixed per-frame fraction keeps the settle time identical at 60/90/120 Hz. `SMOOTHING_TAU = 0.06 s` puts `t ≈ 0.24` at 60 Hz, matching the reference client's fixed 0.25.
+
+`SETTLED_CLOSENESS` (`|dot| ≥ 0.9999999`, ≈0.05°) is where interpolation latches onto its goal exactly. The latch is a jump, so it has to sit below visibility: the obvious-looking 0.99999 is 0.51°, about 1.6 px on a 350 px cube — a small twitch at the end of every settle.
+
+**Composition.** Gyro and orbit are layered, not alternatives: `outer = orbiter.rotation * gyroscope.orientation`. Ordering matters — `a * b` applies `b` first, so the drag wraps the gyro pose exactly the way it wraps a stationary cube, and dragging feels identical either way. `gyroscope.isIdle` short-circuits the multiply (26 per frame) whenever the gyro contributes nothing.
+
+**Driving the loop.** `CubeView`'s `Frame { }` calls `cube.advanceFrame(frameInfo.dt)` once per rendered frame, before any piece transform is read, so every cubie in a frame sees the same orientation. `CubeGyroscope` deliberately avoids Compose `MutableState`: samples arrive tens of times a second and the only consumer is the polling render loop, so routing them through the snapshot system would invalidate state on every packet for nothing. The BLE/UI threads write `@Volatile` fields; the render thread exclusively owns `displayed` / `cachedTransform`, and the cached transform is rebuilt only when `displayed` actually moves.
+
+**Reset semantics.** Switching the toggle off — or losing the BLE link — calls `reset()`, which clears `basis` / `latestSample` and points `target` at identity. `displayed` is deliberately left alone so `advance` eases the cube home rather than snapping at a frame boundary. "Reset orientation" calls `recenter()` **and** animates the orbiter to identity, so both layers of `outer` come home as one motion.
+
+**Persistence.** The toggle lives in the per-profile `solving.gyroEnabled` setting (default false), surfaced as `SolveViewModel.gyroEnabled`. `_gyroEnabled` is seeded from `cube.gyroscope.enabled` rather than `false`: `RubiksCube` is an app-wide singleton while the VM is recreated on every navigation back to Solve, so seeding from `false` would cycle the gyro off then on and discard the user's re-centering.
+
+#### Gyro capability detection
+
+Whether the Gyro button appears at all is a separate question from the rendering pipeline above, and it has **two independent sources**, because neither is sufficient alone:
+
+1. **Declared.** GAN Gen2 carries an explicit capability bit (bit 104 of the hardware event); Gen3 never has the sensor; Gen4 carries no flag and infers support from the hardware name against a one-entry allow-list (`GAN12uiM`); MoYu V10 reports its own flag. `Hardware.gyroSupported` is `Boolean?` so "not established yet" stays distinct from "no" — persisting a premature `false` would hide the feature permanently.
+2. **Observed.** `ConnectionOrchestrator` calls `devicesRepo.markGyroSupported(mac)` the first time actual gyro data arrives (latched per connection). Gyro notifications are unsolicited on cubes with the sensor, so this lands within about a second of connecting, and it cannot be wrong.
+
+The second path exists because the first fails in at least three real ways: a Gen4 hardware name outside the allow-list (the GAN14 ui FreePlay emits gyro data while sitting outside it), a Gen2 capability bit that reads 0 on a cube that plainly has the sensor, and — the one actually observed in the field — a hardware handshake that never completes at all, leaving the cube stuck reporting "hardware blank, gyro unknown" for as long as it stays paired. See *Hardware handshake* in the connection-orchestrator section.
 
 ---
 

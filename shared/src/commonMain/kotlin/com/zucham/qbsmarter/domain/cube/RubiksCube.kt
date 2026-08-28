@@ -3,7 +3,6 @@ package com.zucham.qbsmarter.domain.cube
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.mutableStateOf
 import co.touchlab.kermit.Logger
-import com.zakgof.korender.math.Quaternion
 import com.zakgof.korender.math.Transform
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
@@ -70,16 +69,20 @@ class RubiksCube {
     val centerOrientations: IntArray get() = _centerOrientations.value
 
     /**
+     * The physical cube's own orientation, as reported by its gyroscope.
+     * Declared before [orbiter] because the orbiter's auto-snap gate
+     * queries it.
+     */
+    val gyroscope: CubeGyroscope = CubeGyroscope()
+
+    /**
      * The user's manual orbit, owned by this cube so the VM and the renderer
      * agree on a single source of truth.
+     *
+     * Auto-snap is suppressed while the gyro is driving the view – see
+     * [CubeOrbiter]'s kdoc for why.
      */
-    val orbiter: CubeOrbiter = CubeOrbiter()
-
-    /** The cube's reported gyro orientation. Toggled into the render via [gyroEnabled]. */
-    val orientationQuat: MutableState<Quaternion> = mutableStateOf(Quaternion.IDENTITY)
-
-    /** Whether the gyro orientation should drive rendering. */
-    val gyroEnabled: MutableState<Boolean> = mutableStateOf(false)
+    val orbiter: CubeOrbiter = CubeOrbiter(autoSnapAllowed = { !gyroscope.enabled })
 
     /** Active animation, exposed so the renderer can compose it on top. */
     val activeAnimation: MutableState<ActiveAnimation?> = mutableStateOf(null)
@@ -155,20 +158,57 @@ class RubiksCube {
             rest * baseTransform
         }
 
-        // Gyro and orbit compose differently: gyro is the cube's own
-        // orientation in space, orbit is the user's manual drag.
-        val outer = if (gyroEnabled.value) orientationQuat.value.toTransform() else orbiter.rotation
+        // Gyro and orbit are layered, not alternatives. The gyro places
+        // the cube the way the user is physically holding it; the drag
+        // is a viewing offset the user applies on top of that. Ordering
+        // matters: `a * b` applies b first, so the drag wraps the gyro
+        // pose the same way it wraps a stationary cube, and dragging
+        // feels identical whether or not the gyro is running.
+        //
+        // The isIdle fast path skips a 4x4 multiply per cubie (26 per
+        // frame) whenever the gyro contributes nothing, which is the
+        // case for every user who never turns the feature on.
+        val outer = if (gyroscope.isIdle) orbiter.rotation else orbiter.rotation * gyroscope.orientation
         return outer * local
+    }
+
+    /**
+     * Per-frame tick, driven by the renderer (see
+     * [com.zucham.qbsmarter.ui.screens.solve.CubeView]).
+     *
+     * Only the gyro smoothing needs it today. It lives here rather than
+     * having the view reach into [gyroscope] directly so the render loop
+     * has a single, stable entry point into the cube model as more
+     * frame-driven behaviour appears.
+     *
+     * @param dtSeconds time since the previous rendered frame, in seconds.
+     */
+    fun advanceFrame(dtSeconds: Float) {
+        gyroscope.advance(dtSeconds)
     }
 
     /** Kociemba facelet string for the current logical state. */
     fun facelets(): String = state.toKociembaFacelets()
 
     /**
-     * "Reset orientation" button: smoothly slerp the orbit rotation back to
-     * default (white-up, green-front). Cancels any pending auto-snap.
+     * "Reset orientation" button: bring the cube all the way back to the
+     * default pose (white-up, green-front).
+     *
+     * That means both layers of [pieceTransform]'s `outer` rotation, not
+     * just the drag: the orbiter slerps back to identity, and the
+     * gyroscope re-homes so the pose the cube is physically in right now
+     * becomes the new zero. Resetting only the drag would leave the cube
+     * visibly off-centre whenever the gyro is running, which reads as the
+     * button not working.
+     *
+     * Both halves animate over comparable windows (the orbiter's tween
+     * and the gyro's smoothing), so the cube eases home as one motion.
+     *
+     * The gyro half runs unconditionally – it needs no coroutine scope,
+     * and it is harmless when the gyro is off.
      */
     fun animateOrientationToIdentity(): Boolean {
+        gyroscope.recenter()
         val scope = ownedScope ?: return false
         scope.launch { orbiter.animateToIdentity() }
         return true

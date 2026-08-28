@@ -119,6 +119,20 @@ fun CubeView(
                     )
                     OnTouch { orbiter.touch(it) }
                     Frame {
+                        // Drive time-based cube animation from the render
+                        // loop. The gyro smoothing needs a real frame
+                        // delta to stay frame-rate independent, and this
+                        // is the only place one is available. It must run
+                        // before the piece transforms are read below, so
+                        // every cubie in this frame sees the same
+                        // orientation.
+                        //
+                        // Safe to call from the render thread: advanceFrame
+                        // touches only plain and @Volatile fields, never
+                        // Compose state, so a 60-120 Hz tick can't trigger
+                        // recomposition.
+                        cube.advanceFrame(frameInfo.dt)
+
                         // Light up the cube based on the current theme (light/dark)
                         val lightIntensity = if (mode == ThemeMode.LIGHT || (mode == ThemeMode.SYSTEM && !isSystemDarkTheme)) 4f else 3f
 

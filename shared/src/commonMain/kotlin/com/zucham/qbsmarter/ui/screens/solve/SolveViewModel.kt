@@ -188,10 +188,42 @@ class SolveViewModel(
             CubeConnectionSummary(ConnectionState.DISCONNECTED, null),
         )
 
+    /**
+     * Whether the 3D cube follows the physical cube's gyroscope.
+     *
+     * Backed by the per-profile [SettingsRepository.Keys.GYRO_ENABLED]
+     * setting, so it survives a restart and swaps with the profile. The
+     * flow is the single source of truth the UI renders from; a collector
+     * in [init] pushes each value down into the cube model.
+     *
+     * Seeded from the cube rather than from `false`: [RubiksCube] is an
+     * app-wide singleton but this ViewModel is recreated every time the
+     * user navigates back to the Solve screen. Starting at `false` would
+     * make that collector's first emission switch the gyro *off* before
+     * the persisted `true` arrived a moment later – a needless
+     * off/on cycle that would throw away the user's re-centering.
+     */
+    private val _gyroEnabled = MutableStateFlow(cube.gyroscope.enabled)
+    val gyroEnabled: StateFlow<Boolean> = _gyroEnabled.asStateFlow()
+
     init {
         newScramble()  // give the user something to look at on first paint
 
         driver.events.onEach(::onCubeEvent).launchIn(viewModelScope)
+
+        // Gyro preference: load the persisted value (and reload it on a
+        // profile switch), then mirror whatever the flow holds into the
+        // cube model. Two hops rather than one so the DB is the source of
+        // truth for *persistence* while the flow stays the source of
+        // truth for *the current session* – a toggle takes effect
+        // immediately even for the (theoretical) no-active-profile case
+        // where the write can't be persisted.
+        gyroEnabledSetting()
+            .onEach { _gyroEnabled.value = it }
+            .launchIn(viewModelScope)
+        _gyroEnabled
+            .onEach { cube.gyroscope.setEnabled(it) }
+            .launchIn(viewModelScope)
 
         // Keep the screen on while the user is actively solving.
         // "Actively solving" = phase != IDLE – covers SCRAMBLING (user is
@@ -236,6 +268,12 @@ class SolveViewModel(
                     }
                 } else if (wasConnected && state in CONNECTION_LOSS_STATES) {
                     wasConnected = false
+                    // Drop the gyro pose along with everything else. No
+                    // more samples are coming, and a cube frozen at
+                    // whatever angle it happened to be at when the link
+                    // died looks broken. The user's preference is left
+                    // alone – reconnecting resumes tracking.
+                    cube.gyroscope.reset()
                     abortToIdle()
                 }
             }
@@ -274,6 +312,16 @@ class SolveViewModel(
         activeProfile.id.flatMapLatest { uid ->
             if (uid == null) flowOf(true)
             else settingsRepo.observeBool(uid, SettingsRepository.Keys.KEEP_SCREEN_ON, default = true)
+        }
+
+    /**
+     * Reactive `solving.gyroEnabled` setting for the active profile.
+     * Defaults to false. Re-subscribes when the profile changes.
+     */
+    private fun gyroEnabledSetting() =
+        activeProfile.id.flatMapLatest { uid ->
+            if (uid == null) flowOf(false)
+            else settingsRepo.observeBool(uid, SettingsRepository.Keys.GYRO_ENABLED, default = false)
         }
 
     // -- User actions ------------------------------------------------------
@@ -361,11 +409,34 @@ class SolveViewModel(
         cube.catchUpVisualTo(logicalState)
     }
 
+    /**
+     * "Reset orientation" button. Re-homes both layers of the cube's
+     * orientation – the manual drag offset and the gyro baseline. See
+     * [RubiksCube.animateOrientationToIdentity].
+     */
     fun resetOrientation() {
         cube.animateOrientationToIdentity()
     }
 
-    fun toggleGyro() { cube.gyroEnabled.value = !cube.gyroEnabled.value }
+    /**
+     * "Gyro" button. Flips the preference, applies it to the cube through
+     * the [_gyroEnabled] collector wired in [init], and persists it for
+     * the active profile.
+     *
+     * The write echoes back through [gyroEnabledSetting]; the resulting
+     * emission is identical to what [_gyroEnabled] already holds, and
+     * StateFlow drops duplicates, so there is no feedback loop.
+     */
+    fun toggleGyro() {
+        val next = !_gyroEnabled.value
+        _gyroEnabled.value = next
+        val uid = activeProfile.idSnapshot()
+        if (uid == null) {
+            log.w { "toggleGyro: no active profile, not persisting" }
+            return
+        }
+        settingsRepo.setBool(uid, SettingsRepository.Keys.GYRO_ENABLED, next)
+    }
 
     // -- Driver events -----------------------------------------------------
 
@@ -373,18 +444,65 @@ class SolveViewModel(
         log.d { "received $event in phase ${_phase.value}" }
         when (event) {
             is SmartCubeEvent.Move -> handleMove(event)
-            is SmartCubeEvent.Facelets -> {
-                logicalState = event.state
-                cube.resync(event.state)
-                _deviationMoves.value = emptyList()
-                refreshScrambleProgressFromState()
-                checkPhaseAfterStateChange()
-            }
-            is SmartCubeEvent.Gyro -> {
-                if (cube.gyroEnabled.value) cube.orientationQuat.value = event.quat
-            }
+            is SmartCubeEvent.Facelets -> handleFacelets(event)
+            // Fed in unconditionally, not just while the toggle is on:
+            // the gyroscope keeps the latest sample so that enabling the
+            // feature (or hitting Reset orientation) has a real pose to
+            // work from on the spot rather than waiting for the next
+            // packet. It ignores samples for rendering while disabled.
+            is SmartCubeEvent.Gyro -> cube.gyroscope.onSample(event.quat)
             else -> Unit
         }
+    }
+
+    /**
+     * Reconcile against a hardware state snapshot.
+     *
+     * **Facelets events are not all solicited.** Gen3 and Gen4 cubes emit
+     * one periodically, on their own, as the carrier for their
+     * missed-move recovery protocol – the parser compares the snapshot's
+     * serial against the last move it saw and backfills any gap. Gen2
+     * only ever answers an explicit request, which is why this path used
+     * to look harmless.
+     *
+     * It was not harmless. The previous implementation cleared
+     * [_deviationMoves] and re-derived [_scrambleProgress] on *every*
+     * Facelets event, so on a Gen3/Gen4 cube every periodic heartbeat
+     * wiped the correction hint and – because a deviated state matches
+     * no scramble prefix – reset the progress marker to zero. The user
+     * saw their red correction move appear and then, a beat later, the
+     * scramble jump back to the start, which made scramble mistakes
+     * impossible to walk back.
+     *
+     * So the snapshot is treated as what it actually is – a claim about
+     * the cube's state – and acted on only when that claim differs from
+     * what move tracking already believes:
+     *
+     *  * **Snapshot agrees** (the overwhelmingly common case): a
+     *    heartbeat confirming we're in sync. Do nothing at all. In
+     *    particular don't call [RubiksCube.resync], which would enqueue
+     *    a state reset purely to zero the centre orientations and make
+     *    the centres visibly snap on every heartbeat.
+     *  * **Snapshot differs**: we genuinely lost moves and the hardware
+     *    is the ground truth. Resync, then re-place ourselves on the
+     *    scramble – but only clear the deviation list if the new state
+     *    actually lands on a prefix. If it doesn't, the user is still
+     *    off-rails and the correction moves we've tracked remain the
+     *    best guidance we have; discarding them would strand them.
+     */
+    private fun handleFacelets(event: SmartCubeEvent.Facelets) {
+        if (event.state == logicalState) return
+
+        log.d { "facelets snapshot differs from tracked state; resyncing" }
+        logicalState = event.state
+        cube.resync(event.state)
+
+        val matched = matchedPrefixIndex(_scrambleProgress.value)
+        if (matched != null) {
+            _scrambleProgress.value = matched
+            _deviationMoves.value = emptyList()
+        }
+        checkPhaseAfterStateChange()
     }
 
     private fun handleMove(move: SmartCubeEvent.Move) {
@@ -437,12 +555,16 @@ class SolveViewModel(
         _deviationMoves.value = newDevs
     }
 
-    private fun refreshScrambleProgressFromState() {
-        if (scrambleMoves.isEmpty()) return
-        val matched = matchedPrefixIndex(_scrambleProgress.value)
-        _scrambleProgress.value = matched ?: 0
-    }
-
+    /**
+     * Index of the scramble prefix whose state equals [logicalState], or
+     * null when the cube isn't sitting on any prefix (the user has
+     * deviated).
+     *
+     * [hint] is where we last were; the first three checks cover
+     * "advanced one", "unchanged" and "undid one", which is every case
+     * a single quarter turn can produce. The reverse scan is the
+     * fallback for a jump – a resync, or several moves arriving at once.
+     */
     private fun matchedPrefixIndex(hint: Int): Int? {
         if (hint + 1 < scramblePrefixStates.size &&
             scramblePrefixStates[hint + 1] == logicalState

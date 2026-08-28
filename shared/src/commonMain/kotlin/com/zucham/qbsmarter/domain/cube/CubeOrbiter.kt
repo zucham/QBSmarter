@@ -34,8 +34,19 @@ import kotlinx.coroutines.launch
  *
  * Lifecycle: [bindScope] is called when the cube starts (typically from
  * `RubiksCube.start(scope)`); [unbindScope] cancels any pending snap job.
+ *
+ * @param autoSnapAllowed gate on the drag-end auto-snap, queried at the
+ *   moment the gesture ends. Injected as a predicate rather than a
+ *   mutable flag so there is no second copy of the condition to keep in
+ *   sync – the orbiter asks, it doesn't get told. [RubiksCube] wires this
+ *   to "the gyroscope is off": with gyro tracking live, the rendered pose
+ *   is the drag offset *composed with* the cube's real orientation, so it
+ *   isn't axis-aligned regardless of what the drag component snaps to.
+ *   Snapping then just yanks the cube for no visible payoff.
  */
-class CubeOrbiter {
+class CubeOrbiter(
+    private val autoSnapAllowed: () -> Boolean = { true },
+) {
 
     private val _rotation: MutableState<Transform> = mutableStateOf(Transform.IDENTITY)
     val rotation: Transform get() = _rotation.value
@@ -87,10 +98,12 @@ class CubeOrbiter {
     /**
      * Wait [SNAP_DELAY_MS], then snap to the nearest of the 24 cube
      * orientations. Canceled if the user starts a new touch in that
-     * window. Canceled if the orbiter's scope is unbound.
+     * window. Canceled if the orbiter's scope is unbound. Skipped
+     * entirely when [autoSnapAllowed] says no – see the class kdoc.
      */
     private fun scheduleAutoSnap() {
         pendingSnapJob?.cancel()
+        if (!autoSnapAllowed()) return
         val s = scope ?: return
         pendingSnapJob = s.launch {
             delay(SNAP_DELAY_MS)

@@ -58,6 +58,27 @@ fun Quaternion.toTransform(): Transform {
 fun dot(a: Quaternion, b: Quaternion): Float =
     a.w * b.w + a.r.x * b.r.x + a.r.y * b.r.y + a.r.z * b.r.z
 
+/**
+ * Rotation inverse for a unit quaternion.
+ *
+ * Deliberately spelled out rather than using Korender's `unaryMinus`
+ * operator: in Korender 0.6.1 `-q` returns `Quaternion(w, -r)`, which is
+ * the *conjugate*, not the negation the operator name implies. Relying on
+ * that would be a trap for the next reader (and would silently change
+ * meaning if the library ever fixes the operator), so we name the
+ * operation we actually want.
+ */
+fun Quaternion.conjugate(): Quaternion = Quaternion(w, -r)
+
+/**
+ * How close two rotations are, as `|dot(a, b)|` in `[0, 1]` – 1 means
+ * identical. `abs` because `q` and `-q` encode the same rotation.
+ *
+ * Cheaper than an angle and monotonic in it, which is all the smoothing
+ * loop needs to decide "close enough, stop interpolating".
+ */
+fun rotationCloseness(a: Quaternion, b: Quaternion): Float = abs(dot(a, b))
+
 /** Spherical-linear interpolation. */
 fun slerp(a: Quaternion, b: Quaternion, t: Float): Quaternion {
     var bw = b.w
